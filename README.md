@@ -209,9 +209,6 @@ An experimental two-stage architecture is implemented in `server_g2.py`:
 ### Setup (CUDA required)
 
 ```bash
-# Install additional dependencies
-pip install -r agent/requirements-g2.txt
-
 # Download GUI-G2-3B (~6GB)
 cd agent
 huggingface-cli download inclusionAI/GUI-G2-3B --local-dir ./models/GUI-G2-3B
@@ -237,8 +234,7 @@ gui-agent/
 │   ├── executor.py          # Perceive-plan-act loop + ElectronBridge
 │   ├── server.py            # Standard FastAPI server
 │   ├── server_g2.py         # Planner+Grounder server variant
-│   ├── requirements.txt     # Core dependencies
-│   └── requirements-g2.txt  # GUI-G2 additional dependencies
+│   └── requirements.txt     # Core dependencies
 ├── benchmark/
 │   └── benchmark.py         # Task suite + runner + report generator
 ├── electron-app/
