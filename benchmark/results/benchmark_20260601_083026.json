@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-06-01T08:18:38.168139Z",
+  "modes": [
+    "screenshot"
+  ],
+  "summary_by_mode": {
+    "screenshot": {
+      "success_rate": 0.0,
+      "avg_steps": 0,
+      "avg_total_time_s": 350.0,
+      "avg_latency_s": 0.0,
+      "n_tasks": 2,
+      "n_success": 0
+    }
+  },
+  "task_results": [
+    {
+      "task_id": "form_search",
+      "mode": "screenshot",
+      "success": false,
+      "step_count": 0,
+      "total_time_s": 700.0,
+      "avg_latency_s": 0.0,
+      "failure_reason": "benchmark timeout"
+    },
+    {
+      "task_id": "nav_github",
+      "mode": "screenshot",
+      "success": false,
+      "step_count": 0,
+      "total_time_s": 0.0,
+      "avg_latency_s": 0.0,
+      "failure_reason": "server rejected: busy"
+    }
+  ]
+}

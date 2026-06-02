@@ -1,0 +1,24 @@
+{
+  "name": "gui-agent-demo",
+  "version": "0.1.0",
+  "description": "Edge GUI Agent Demo — UI-TARS + Electron",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "ELECTRON_DEV=1 electron .",
+    "build": "electron-builder"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.6.3"
+  },
+  "build": {
+    "appId": "com.gui-agent.demo",
+    "productName": "GUI Agent Demo",
+    "mac": { "category": "public.app-category.developer-tools" },
+    "win": { "target": "nsis" }
+  }
+}

@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>GUI Agent</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #0f1117;
+    --bg2:     #1a1d27;
+    --bg3:     #21263a;
+    --border:  rgba(255,255,255,0.08);
+    --purple:  #7c6ff7;
+    --teal:    #22d3aa;
+    --coral:   #f97066;
+    --amber:   #f59e0b;
+    --text:    #e2e4f0;
+    --muted:   #8890aa;
+    --success: #22c55e;
+    --fail:    #f87171;
+    --font:    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono:    "SF Mono", "Fira Code", monospace;
+    --radius:  8px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .logo {
+    width: 26px; height: 26px;
+    background: linear-gradient(135deg, var(--purple), var(--teal));
+    border-radius: 6px;
+    display: grid; place-items: center;
+    font-size: 14px; font-weight: 700; color: #fff;
+  }
+  header h1 { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  .status-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--muted); margin-left: auto;
+    transition: background 0.3s;
+  }
+  .status-dot.running { background: var(--amber); animation: pulse 1.2s ease-in-out infinite; }
+  .status-dot.success { background: var(--success); }
+  .status-dot.fail    { background: var(--fail); }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* ── Nav bar ── */
+  .nav-bar {
+    display: flex; gap: 6px; padding: 10px 16px 8px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .nav-bar input {
+    flex: 1; background: var(--bg3); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 7px 10px; color: var(--text);
+    font-size: 12px; outline: none;
+  }
+  .nav-bar input:focus { border-color: var(--purple); }
+  .btn {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 7px 11px;
+    color: var(--text); cursor: pointer; font-size: 12px;
+    white-space: nowrap; transition: background 0.15s;
+  }
+  .btn:hover { background: var(--bg2); border-color: rgba(255,255,255,0.15); }
+  .btn.primary { background: var(--purple); border-color: transparent; color: #fff; }
+  .btn.primary:hover { background: #6b5ef0; }
+  .btn:disabled { opacity: 0.4; pointer-events: none; }
+
+  /* ── Task input area ── */
+  .task-area {
+    padding: 10px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .task-area label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 5px; }
+  .task-row { display: flex; gap: 6px; }
+  .task-area textarea {
+    flex: 1; background: var(--bg3); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 10px; color: var(--text);
+    font-family: var(--font); font-size: 12px; resize: none; outline: none;
+    min-height: 48px;
+  }
+  .task-area textarea:focus { border-color: var(--purple); }
+
+  /* Mode selector */
+  .mode-row {
+    display: flex; gap: 6px; margin-top: 8px; align-items: center; flex-wrap: wrap;
+  }
+  .mode-row span { font-size: 11px; color: var(--muted); }
+  .mode-btn {
+    font-size: 11px; padding: 4px 9px; border-radius: 5px;
+    background: var(--bg3); border: 1px solid var(--border);
+    color: var(--muted); cursor: pointer; transition: all 0.15s;
+  }
+  .mode-btn.active { background: var(--purple); border-color: transparent; color: #fff; }
+
+  /* ── Main scroll area ── */
+  .main { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+
+  /* ── Screenshot preview ── */
+  .preview-card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+  }
+  .preview-card img {
+    width: 100%; display: block; border-radius: var(--radius);
+    max-height: 180px; object-fit: contain; background: #000;
+  }
+  .preview-card .placeholder {
+    width: 100%; height: 120px; display: grid; place-items: center;
+    color: var(--muted); font-size: 12px; background: var(--bg3);
+  }
+
+  /* ── Thought bubble ── */
+  .thought {
+    background: rgba(124,111,247,0.08); border: 1px solid rgba(124,111,247,0.2);
+    border-radius: var(--radius); padding: 9px 12px;
+    font-size: 12px; line-height: 1.55; color: #c5c0f0;
+    display: none;
+  }
+  .thought.visible { display: block; }
+  .thought::before { content: "💭 "; }
+
+  /* ── Action badge ── */
+  .action-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 20px; padding: 4px 11px; font-size: 11px;
+    font-family: var(--mono); display: none;
+  }
+  .action-badge.visible { display: inline-flex; }
+  .action-type {
+    background: var(--teal); color: #0a2e26;
+    border-radius: 12px; padding: 1px 7px; font-weight: 600;
+  }
+
+  /* ── Step history ── */
+  .history-header {
+    font-size: 11px; color: var(--muted); font-weight: 500;
+    letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 2px;
+  }
+  .steps { display: flex; flex-direction: column; gap: 4px; }
+  .step-item {
+    display: flex; align-items: flex-start; gap: 8px;
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 10px;
+    animation: slideIn 0.2s ease;
+  }
+  @keyframes slideIn { from { opacity:0; transform: translateY(4px); } to { opacity:1; transform: none; } }
+  .step-num {
+    width: 20px; height: 20px; border-radius: 50%; background: var(--bg3);
+    display: grid; place-items: center; font-size: 10px; color: var(--muted);
+    flex-shrink: 0; font-family: var(--mono);
+  }
+  .step-content { flex: 1; min-width: 0; }
+  .step-action {
+    font-family: var(--mono); font-size: 11px; color: var(--teal); margin-bottom: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .step-thought { font-size: 11px; color: var(--muted); line-height: 1.4; }
+  .step-latency { font-size: 10px; color: var(--muted); flex-shrink: 0; }
+
+  /* ── Result banner ── */
+  .result-banner {
+    border-radius: var(--radius); padding: 10px 14px;
+    font-size: 13px; font-weight: 500; display: none;
+  }
+  .result-banner.visible { display: block; }
+  .result-banner.success { background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.3); color: #4ade80; }
+  .result-banner.fail    { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); color: #f87171; }
+
+  /* ── Metrics row ── */
+  .metrics {
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .metric {
+    flex: 1; min-width: 80px; background: var(--bg2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 8px 10px; text-align: center;
+  }
+  .metric .val { font-size: 18px; font-weight: 600; color: var(--text); }
+  .metric .lbl { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+  /* ── Privacy indicator ── */
+  .privacy {
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: var(--radius); font-size: 11px; color: var(--muted);
+  }
+  .privacy .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .privacy.local .dot { background: var(--success); }
+  .privacy.hybrid .dot { background: var(--amber); }
+  .privacy.local .label { color: var(--success); }
+  .privacy.hybrid .label { color: var(--amber); }
+
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">G</div>
+  <h1>GUI Agent</h1>
+  <div class="status-dot" id="statusDot"></div>
+</header>
+
+<div class="nav-bar">
+  <input type="text" id="urlInput" placeholder="Enter URL…" value="https://github.com"/>
+  <button class="btn" id="goBtn">Go</button>
+</div>
+
+<div class="task-area">
+  <label>Task instruction</label>
+  <div class="task-row">
+    <textarea id="taskInput" rows="2"
+      placeholder="e.g. Search for 'gui agent electron' and open the most starred result">Search GitHub for 'ui-tars' and tell me how many stars the top result has</textarea>
+  </div>
+  <div class="mode-row">
+    <span>Mode:</span>
+    <button class="mode-btn active" data-mode="screenshot">Screenshot</button>
+    <button class="mode-btn" data-mode="hybrid">Hybrid</button>
+    <button class="mode-btn" data-mode="dom">DOM</button>
+    <button class="btn primary" id="runBtn" style="margin-left:auto">▶ Run</button>
+    <button class="btn" id="stopBtn" disabled>■ Stop</button>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- Privacy mode indicator -->
+  <div class="privacy local" id="privacyIndicator">
+    <div class="dot"></div>
+    <span class="label">Local only</span>
+    <span>— screenshots stay on device</span>
+  </div>
+
+  <!-- Live screenshot preview -->
+  <div class="preview-card" id="previewCard">
+    <div class="placeholder" id="previewPlaceholder">Navigate to a page to begin</div>
+    <img id="previewImg" style="display:none" alt="Current browser state"/>
+  </div>
+
+  <!-- Thought -->
+  <div class="thought" id="thoughtBox"></div>
+
+  <!-- Current action -->
+  <div class="action-badge" id="actionBadge">
+    <span class="action-type" id="actionType"></span>
+    <span id="actionDetail"></span>
+  </div>
+
+  <!-- Metrics -->
+  <div class="metrics" id="metricsRow" style="display:none">
+    <div class="metric"><div class="val" id="mSteps">0</div><div class="lbl">Steps</div></div>
+    <div class="metric"><div class="val" id="mTime">0s</div><div class="lbl">Total time</div></div>
+    <div class="metric"><div class="val" id="mLatency">0s</div><div class="lbl">Avg latency</div></div>
+  </div>
+
+  <!-- Result banner -->
+  <div class="result-banner" id="resultBanner"></div>
+
+  <!-- Step history -->
+  <div class="history-header" id="historyHeader" style="display:none">Step History</div>
+  <div class="steps" id="stepList"></div>
+
+</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let selectedMode = 'screenshot';
+  let stepCount = 0;
+  let latencies = [];
+  let startTime = null;
+
+  const AGENT_SERVER = 'http://localhost:8000';
+
+  // ── DOM refs ───────────────────────────────────────────────────────────────
+  const urlInput       = document.getElementById('urlInput');
+  const goBtn          = document.getElementById('goBtn');
+  const taskInput      = document.getElementById('taskInput');
+  const runBtn         = document.getElementById('runBtn');
+  const stopBtn        = document.getElementById('stopBtn');
+  const statusDot      = document.getElementById('statusDot');
+  const previewImg     = document.getElementById('previewImg');
+  const previewPlaceholder = document.getElementById('previewPlaceholder');
+  const thoughtBox     = document.getElementById('thoughtBox');
+  const actionBadge    = document.getElementById('actionBadge');
+  const actionType     = document.getElementById('actionType');
+  const actionDetail   = document.getElementById('actionDetail');
+  const stepList       = document.getElementById('stepList');
+  const historyHeader  = document.getElementById('historyHeader');
+  const resultBanner   = document.getElementById('resultBanner');
+  const metricsRow     = document.getElementById('metricsRow');
+  const privacyIndicator = document.getElementById('privacyIndicator');
+
+  // ── Navigation ─────────────────────────────────────────────────────────────
+  goBtn.addEventListener('click', () => {
+    let url = urlInput.value.trim();
+    if (!url.startsWith('http')) url = 'https://' + url;
+    window.electronAPI.navigate(url);
+  });
+  urlInput.addEventListener('keydown', e => { if (e.key === 'Enter') goBtn.click(); });
+
+  // ── Mode selection ─────────────────────────────────────────────────────────
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      selectedMode = btn.dataset.mode;
+      updatePrivacyIndicator();
+    });
+  });
+
+  function updatePrivacyIndicator() {
+    if (selectedMode === 'hybrid') {
+      privacyIndicator.className = 'privacy hybrid';
+      privacyIndicator.querySelector('.label').textContent = 'Hybrid mode';
+      privacyIndicator.querySelector('span:last-child').textContent = '— screenshots sent to Claude API';
+    } else {
+      privacyIndicator.className = 'privacy local';
+      privacyIndicator.querySelector('.label').textContent = 'Local only';
+      privacyIndicator.querySelector('span:last-child').textContent = '— screenshots stay on device';
+    }
+  }
+
+  // ── Run ────────────────────────────────────────────────────────────────────
+  runBtn.addEventListener('click', async () => {
+    const task = taskInput.value.trim();
+    if (!task) return;
+    const url = urlInput.value.trim();
+
+    resetUI();
+    setRunning(true);
+
+    try {
+      const res = await fetch(`${AGENT_SERVER}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task,
+          start_url: url.startsWith('http') ? url : 'https://' + url,
+          mode: selectedMode,
+          max_steps: 20,
+        }),
+      });
+      const data = await res.json();
+      if (data.status === 'busy') {
+        showBanner(false, 'Agent is already running. Please wait.');
+        setRunning(false);
+      }
+    } catch (e) {
+      showBanner(false, `Cannot reach agent server: ${e.message}`);
+      setRunning(false);
+    }
+  });
+
+  // ── SSE — live step updates ────────────────────────────────────────────────
+  let evtSource = null;
+  function connectSSE() {
+    evtSource = new EventSource(`${AGENT_SERVER}/status/stream`);
+    evtSource.onmessage = (e) => {
+      const payload = JSON.parse(e.data);
+      if (payload.type === 'ping') return;
+      if (payload.type === 'done') {
+        handleDone(payload.result);
+      } else if (payload.type === 'error') {
+        showBanner(false, payload.message);
+        setRunning(false);
+      } else {
+        handleStep(payload);
+      }
+    };
+  }
+  connectSSE();
+
+  // ── IPC from main process (alternative push path) ─────────────────────────
+  window.electronAPI.onAgentStatus((data) => {
+    if (data.type === 'done')       handleDone(data.result);
+    else if (data.type === 'error') { showBanner(false, data.message); setRunning(false); }
+    else                            handleStep(data);
+  });
+
+  // ── Step handler ───────────────────────────────────────────────────────────
+  function handleStep(payload) {
+    stepCount++;
+    latencies.push(payload.latency_s || 0);
+
+    // Update preview
+    if (payload.screenshot) {
+      previewPlaceholder.style.display = 'none';
+      previewImg.style.display = 'block';
+      previewImg.src = `data:image/png;base64,${payload.screenshot}`;
+    }
+
+    // Thought
+    if (payload.thought) {
+      thoughtBox.textContent = payload.thought;
+      thoughtBox.classList.add('visible');
+    }
+
+    // Action badge
+    const action = payload.action || {};
+    actionType.textContent = action.type || '…';
+    let detail = '';
+    if (action.x !== undefined) detail = `(${(action.x*100).toFixed(0)}%, ${(action.y*100).toFixed(0)}%)`;
+    else if (action.text)       detail = `"${action.text.slice(0, 20)}"`;
+    else if (action.url)        detail = action.url.slice(0, 30);
+    else if (action.key)        detail = action.key;
+    actionDetail.textContent = detail;
+    actionBadge.classList.add('visible');
+
+    // Append step
+    addStepItem(stepCount, action, payload.thought, payload.latency_s);
+
+    // Update metrics
+    updateMetrics();
+  }
+
+  function handleDone(result) {
+    setRunning(false);
+    if (!result) return;
+    const ok = result.success;
+    showBanner(ok, ok ? `✓ Task completed in ${result.step_count} steps (${result.total_time_s.toFixed(1)}s)`
+                      : `✗ Failed: ${result.failure_reason || 'unknown'}`);
+    updateMetrics(result);
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function addStepItem(num, action, thought, latency) {
+    historyHeader.style.display = 'block';
+    const el = document.createElement('div');
+    el.className = 'step-item';
+    const typeStr = action?.type || '?';
+    let detail = '';
+    if (action?.x !== undefined) detail = ` @ (${(action.x*100).toFixed(0)}%,${(action.y*100).toFixed(0)}%)`;
+    else if (action?.text) detail = `: "${action.text.slice(0,20)}"`;
+    el.innerHTML = `
+      <div class="step-num">${num}</div>
+      <div class="step-content">
+        <div class="step-action">${typeStr}${detail}</div>
+        ${thought ? `<div class="step-thought">${thought.slice(0, 100)}</div>` : ''}
+      </div>
+      <div class="step-latency">${latency ? latency.toFixed(2)+'s' : ''}</div>
+    `;
+    stepList.appendChild(el);
+    stepList.scrollTop = stepList.scrollHeight;
+  }
+
+  function updateMetrics(result) {
+    metricsRow.style.display = 'flex';
+    document.getElementById('mSteps').textContent = result ? result.step_count : stepCount;
+    const elapsed = startTime ? ((Date.now() - startTime) / 1000).toFixed(1) : '…';
+    document.getElementById('mTime').textContent = result ? result.total_time_s.toFixed(1)+'s' : elapsed+'s';
+    const avgLat = latencies.length ? (latencies.reduce((a,b)=>a+b,0)/latencies.length).toFixed(2) : '…';
+    document.getElementById('mLatency').textContent = (result?.avg_latency_s ?? avgLat)+'s';
+  }
+
+  function showBanner(ok, msg) {
+    resultBanner.className = `result-banner visible ${ok ? 'success' : 'fail'}`;
+    resultBanner.textContent = msg;
+  }
+
+  function setRunning(running) {
+    runBtn.disabled = running;
+    stopBtn.disabled = !running;
+    statusDot.className = `status-dot ${running ? 'running' : ''}`;
+    if (running) startTime = Date.now();
+  }
+
+  function resetUI() {
+    stepCount = 0; latencies = []; startTime = null;
+    stepList.innerHTML = '';
+    historyHeader.style.display = 'none';
+    thoughtBox.classList.remove('visible');
+    actionBadge.classList.remove('visible');
+    resultBanner.className = 'result-banner';
+    metricsRow.style.display = 'none';
+    statusDot.className = 'status-dot';
+  }
+</script>
+</body>
+</html>

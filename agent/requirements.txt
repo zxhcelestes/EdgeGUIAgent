@@ -1,0 +1,13 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+httpx>=0.27.0
+pydantic>=2.7.0
+google-genai>=1.0.0
+pillow>=10.0.0
+transformers>=4.45.0
+torch>=2.1.0
+accelerate>=0.27.0
+qwen-vl-utils>=0.0.8
+# Model download:
+#   huggingface-cli download inclusionAI/GUI-G2-3B --local-dir ./models/GUI-G2-3B
+

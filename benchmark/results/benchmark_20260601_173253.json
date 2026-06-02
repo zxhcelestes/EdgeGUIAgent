@@ -1,0 +1,63 @@
+{
+  "timestamp": "2026-06-01T16:36:09.638700Z",
+  "modes": [
+    "screenshot",
+    "dom"
+  ],
+  "summary_by_mode": {
+    "screenshot": {
+      "success_rate": 0.5,
+      "avg_steps": 8,
+      "avg_total_time_s": 840.53,
+      "avg_latency_s": 101.359,
+      "n_tasks": 2,
+      "n_success": 1
+    },
+    "dom": {
+      "success_rate": 0.5,
+      "avg_steps": 8,
+      "avg_total_time_s": 851.89,
+      "avg_latency_s": 106.329,
+      "n_tasks": 2,
+      "n_success": 1
+    }
+  },
+  "task_results": [
+    {
+      "task_id": "form_search",
+      "mode": "screenshot",
+      "success": true,
+      "step_count": 1,
+      "total_time_s": 108.645,
+      "avg_latency_s": 99.329,
+      "failure_reason": null
+    },
+    {
+      "task_id": "nav_github",
+      "mode": "screenshot",
+      "success": false,
+      "step_count": 15,
+      "total_time_s": 1572.418,
+      "avg_latency_s": 103.389,
+      "failure_reason": "max steps (15) reached"
+    },
+    {
+      "task_id": "form_search",
+      "mode": "dom",
+      "success": true,
+      "step_count": 1,
+      "total_time_s": 117.808,
+      "avg_latency_s": 108.316,
+      "failure_reason": null
+    },
+    {
+      "task_id": "nav_github",
+      "mode": "dom",
+      "success": false,
+      "step_count": 15,
+      "total_time_s": 1585.978,
+      "avg_latency_s": 104.342,
+      "failure_reason": "max steps (15) reached"
+    }
+  ]
+}
