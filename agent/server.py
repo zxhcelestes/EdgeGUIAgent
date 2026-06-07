@@ -3,10 +3,15 @@ Agent HTTP Server — FastAPI app that Electron calls to trigger runs
 and that pushes status back to the renderer via SSE.
 
 Endpoints:
-  POST /run          { task, start_url, mode }  → starts agent run
-  GET  /status/stream                          → SSE stream of live updates
-  GET  /results                                → list of past RunResult dicts
-  GET  /health
+  POST /run           { task, start_url, mode, max_steps }
+  GET  /status/stream → SSE stream of live step updates
+  GET  /results       → list of past RunResult dicts
+  GET  /health        → ollama/gemini status + running flag
+
+Model selection via environment variables:
+  OLLAMA_MODEL=qwen2.5vl:3b   (default, M2 16GB)
+  OLLAMA_MODEL=qwen2.5vl:7b   (recommended, 24GB+ VRAM)
+  OLLAMA_MODEL=qwen2.5vl:72b  (high accuracy, A100 class)
 """
 
 import asyncio
@@ -25,27 +30,44 @@ from vlm_client import OllamaVLMClient, GeminiVLMClient
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
+# Override any of these via environment variables:
+#
+#   OLLAMA_MODEL=qwen2.5vl:7b uvicorn server:app ...
+#   OLLAMA_MODEL=qwen2.5vl:7b STEP_DELAY=0.1 uvicorn server:app ...
 
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5vl:3b")
 OLLAMA_URL   = os.getenv("OLLAMA_URL",   "http://localhost:11434")
-GEMINI_KEY= os.getenv("GEMINI_API_KEY", "")
-ELECTRON_URL = os.getenv("ELECTRON_URL", "http://localhost:7788")
+GEMINI_KEY   = os.getenv("GEMINI_API_KEY", "")
+ELECTRON_URL = os.getenv("ELECTRON_URL",  "http://localhost:7788")
+
+# Step delay — 7B is faster per token, can afford shorter delay
+# 3b on M2:      0.3s (inference already slow, no point waiting more)
+# 7b on 24GB:    0.5s (faster inference, slightly longer wait for page settle)
+# 7b+ on A100:   1.0s (very fast inference, more wait helps page rendering)
+STEP_DELAY   = float(os.getenv("STEP_DELAY", "0.3"))
+
+# Max steps — 7B is more capable, may need fewer steps
+MAX_STEPS    = int(os.getenv("MAX_STEPS", "20"))
 
 
-# ── Global state ─────────────────────────────────────────────────────────────
+# ── Global state ──────────────────────────────────────────────────────────────
 
 _status_queue: asyncio.Queue = asyncio.Queue()
 _results: list[dict] = []
 _running = False
 
-local_client: Optional[OllamaVLMClient] = None
-remote_client: Optional[GeminiVLMClient] = None
-bridge: Optional[ElectronBridge] = None
+local_client:  Optional[OllamaVLMClient]  = None
+remote_client: Optional[GeminiVLMClient]  = None
+bridge:        Optional[ElectronBridge]   = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global local_client, remote_client, bridge
+
+    print(f"[server] model:      {OLLAMA_MODEL}")
+    print(f"[server] step_delay: {STEP_DELAY}s")
+    print(f"[server] max_steps:  {MAX_STEPS}")
 
     local_client = OllamaVLMClient(model=OLLAMA_MODEL, base_url=OLLAMA_URL)
     if GEMINI_KEY:
@@ -69,13 +91,13 @@ app.add_middleware(
 )
 
 
-# ── Models ────────────────────────────────────────────────────────────────────
+# ── Request / response models ─────────────────────────────────────────────────
 
 class RunRequest(BaseModel):
     task: str
     start_url: Optional[str] = None
-    mode: str = "screenshot"    # "screenshot" | "hybrid" | "dom"
-    max_steps: int = 20
+    mode: str = "screenshot"
+    max_steps: int = MAX_STEPS
 
 
 class RunResponse(BaseModel):
@@ -89,10 +111,12 @@ class RunResponse(BaseModel):
 async def health():
     ollama_ok = local_client.is_available() if local_client else False
     return {
-        "status": "ok",
-        "ollama": ollama_ok,
-        "gemini": bool(GEMINI_KEY),
-        "running": _running,
+        "status":     "ok",
+        "ollama":     ollama_ok,
+        "model":      OLLAMA_MODEL,
+        "gemini":     bool(GEMINI_KEY),
+        "running":    _running,
+        "step_delay": STEP_DELAY,
     }
 
 
@@ -104,8 +128,6 @@ async def run_task(req: RunRequest):
         return RunResponse(status="busy", message="Agent is already running a task.")
 
     _running = True
-
-    # Run in background so we can return immediately
     asyncio.create_task(_run_agent(req))
     return RunResponse(status="started", message=f"Started: {req.task}")
 
@@ -116,18 +138,22 @@ async def _run_agent(req: RunRequest):
     loop = asyncio.get_event_loop()
 
     def _sync_run():
-        print(f"[agent] starting task: {req.task}")
-        print(f"[agent] mode: {req.mode}, start_url: {req.start_url}")
+        print(f"[agent] run started")
+        print(f"[agent] task:      {req.task}")
+        print(f"[agent] mode:      {req.mode}")
+        print(f"[agent] model:     {OLLAMA_MODEL}")
+        print(f"[agent] start_url: {req.start_url}")
+
         executor = AgentExecutor(
             bridge=bridge,
-            local_client=local_client if req.mode != "hybrid" else None,
-            remote_client=remote_client if req.mode in ("hybrid",) else None,
+            local_client=local_client  if req.mode != "hybrid" else None,
+            remote_client=remote_client if req.mode == "hybrid"  else None,
             mode=req.mode,
             max_steps=req.max_steps,
-            step_delay_s=0.3,
+            step_delay_s=STEP_DELAY,
         )
+
         def _push(payload):
-            print(f"[agent] step update: {payload.get('step')} action={payload.get('action', {}).get('type')}")
             asyncio.run_coroutine_threadsafe(
                 _status_queue.put(payload), loop
             )
@@ -135,7 +161,6 @@ async def _run_agent(req: RunRequest):
         return executor.run(task=req.task, start_url=req.start_url)
 
     try:
-        print("[agent] run started")
         result: RunResult = await loop.run_in_executor(None, _sync_run)
         print(f"[agent] run finished: success={result.success}")
         _results.append(result.to_dict())
@@ -144,23 +169,13 @@ async def _run_agent(req: RunRequest):
         print(f"[agent] error: {e}")
         import traceback
         traceback.print_exc()
-        _results.append({
-            "task": req.task,
-            "mode": req.mode,
-            "success": False,
-            "step_count": 0,
-            "total_time_s": 0.0,
-            "avg_latency_s": 0.0,
-            "failure_reason": str(e),
-        })
-        err = {"type": "error", "message": str(e)}
-        await _status_queue.put(err)
+        await _status_queue.put({"type": "error", "message": str(e)})
     finally:
         _running = False
 
+
 @app.get("/status/stream")
 async def status_stream():
-    """Server-Sent Events stream of agent step updates."""
     async def _generator():
         while True:
             try:

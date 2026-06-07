@@ -83,11 +83,11 @@ Rules:
 """
 
 DOM_CONTEXT_TEMPLATE = """
---- DOM CONTEXT (interactable elements, max 15) ---
+--- DOM CONTEXT (interactable elements) ---
 {dom_json}
 --- END DOM CONTEXT ---
 
-Use normalized_center x/y values directly as your action coordinates.
+Use the center x/y values directly as your action coordinates.
 """
 
 
@@ -279,6 +279,44 @@ class OllamaVLMClient:
         action = _parse_action_response(raw, screen_w, screen_h)
         return action, latency
 
+    def evaluate(
+        self,
+        screenshot_bytes: bytes,
+        task: str,
+        current_url: str,
+        screen_w: int,
+        screen_h: int,
+    ) -> tuple[bool, str]:
+        """
+        Dedicated evaluator call with its own system prompt.
+        Returns (is_complete, reason).
+        Called only when the planner outputs 'done' — verifies before accepting.
+        """
+        prompt = (
+            f"Task: {task}\n"
+            f"Current URL: {current_url}\n\n"
+            "Has this task been fully completed based on what you see in the screenshot?"
+        )
+        b64 = _encode_image(screenshot_bytes)
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": EVAL_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt, "images": [b64]},
+            ],
+            "stream": False,
+            "options": {"temperature": 0.0},
+        }
+        try:
+            resp = self._client.post(f"{self.base_url}/api/chat", json=payload)
+            resp.raise_for_status()
+            raw = resp.json()["message"]["content"]
+            print(f"[eval] raw: {raw[:150]}")
+            return _parse_eval_response(raw)
+        except Exception as e:
+            print(f"[eval] error: {e}")
+            return False, f"evaluator error: {e}"
+
     def close(self):
         self._client.close()
 
@@ -328,6 +366,38 @@ class GeminiVLMClient:
         action = _parse_action_response(response.text, screen_w, screen_h)
         return action, latency
 
+    def evaluate(
+        self,
+        screenshot_bytes: bytes,
+        task: str,
+        current_url: str,
+        screen_w: int,
+        screen_h: int,
+    ) -> tuple[bool, str]:
+        """Dedicated evaluator call for Gemini hybrid mode."""
+        prompt = (
+            f"Task: {task}\n"
+            f"Current URL: {current_url}\n\n"
+            "Has this task been fully completed based on what you see in the screenshot?"
+        )
+        image = Image.open(io.BytesIO(screenshot_bytes))
+        try:
+            t0 = time.perf_counter()
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=[prompt, image],
+                config=types.GenerateContentConfig(
+                    system_instruction=EVAL_SYSTEM_PROMPT,
+                    temperature=0.0,
+                ),
+            )
+            print(f"[eval] gemini latency: {time.perf_counter()-t0:.1f}s")
+            print(f"[eval] raw: {response.text[:150]}")
+            return _parse_eval_response(response.text)
+        except Exception as e:
+            print(f"[eval] gemini error: {e}")
+            return False, f"evaluator error: {e}"
+
     def close(self):
         pass
 
@@ -335,44 +405,78 @@ class GeminiVLMClient:
 # ── DOM context builder ───────────────────────────────────────────────────────
 
 def build_dom_context(elements: list[dict], screen_w: int, screen_h: int) -> str:
+    """
+    Convert raw DOM element list into a compact prompt string.
+
+    Priority filtering to avoid token overflow on small models:
+      1. Form elements (input/button/textarea/select) — up to 10
+      2. Short navigation links (text < 30 chars) — up to 5
+      3. Long-text links (search results etc.) — excluded
+
+    Total capped at 15 elements with 40-char text limit.
+    """
+    # Prevent division by zero if screenshot size unavailable
     screen_w = screen_w or 1280
     screen_h = screen_h or 800
 
-    # Priority 1: form elements (input, button, textarea, select)
+    # Priority 1: form elements
     form_els = [
         e for e in elements
         if e.get("tag") in ("input", "button", "textarea", "select")
-    ][:8]
+    ][:10]
 
-    # Priority 2: top-level nav links (short text, near top of page)
+    # Priority 2: short nav links (excludes long search-result titles)
+    used_texts = {e.get("text", "") for e in form_els}
     nav_links = [
         e for e in elements
         if e.get("tag") == "a"
         and 0 < len(e.get("text") or "") < 30
-        and e.get("rect", {}).get("top", 999) < 100
-    ][:8]
-
-    # Priority 3: other short links not in nav
-    used_texts = {e.get("text") for e in form_els + nav_links}
-    other_links = [
-        e for e in elements
-        if e.get("tag") == "a"
-        and 0 < len(e.get("text") or "") < 30
         and e.get("text") not in used_texts
-        and e.get("rect", {}).get("top", 999) >= 100
-    ][:4]
+    ][:5]
 
-    selected = form_els + nav_links + other_links
+    selected = form_els + nav_links
 
     compact = []
     for el in selected:
         rect = el.get("rect", {})
-        cx = (rect.get("left", 0) + rect.get("width", 0) / 2) / screen_w
-        cy = (rect.get("top", 0) + rect.get("height", 0) / 2) / screen_h
+        cx = (rect.get("left", 0) + rect.get("width",  0) / 2) / screen_w
+        cy = (rect.get("top",  0) + rect.get("height", 0) / 2) / screen_h
         compact.append({
-            "tag": el.get("tag"),
-            "text": (el.get("text") or "")[:40],
+            "tag":    el.get("tag"),
+            "text":   (el.get("text") or "")[:40],
             "center": {"x": round(cx, 3), "y": round(cy, 3)},
         })
 
     return DOM_CONTEXT_TEMPLATE.format(dom_json=json.dumps(compact, indent=2))
+
+
+# ── Shared evaluator prompt ───────────────────────────────────────────────────
+
+EVAL_SYSTEM_PROMPT = """You are evaluating whether a GUI agent has completed a task.
+Look at the screenshot carefully. Respond with JSON only:
+{"complete": true or false, "reason": "<one sentence explanation>"}
+
+Be strict:
+- For search tasks: only true if search results are clearly visible on screen.
+- For navigation tasks: only true if the target page is fully loaded.
+- For extraction tasks: only true if the required information is visible on screen.
+- Return false if the page is still loading, showing an error, or showing the wrong content.
+Do not output anything except the JSON object."""
+
+
+def _parse_eval_response(raw: str) -> tuple[bool, str]:
+    """Parse evaluator response into (complete, reason)."""
+    if not raw or not raw.strip():
+        return False, "empty response"
+    cleaned = re.sub(r"```(?:json)?|```", "", raw).strip()
+    match = re.search(r"\{[\s\S]*?\}", cleaned)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            return bool(data.get("complete", False)), data.get("reason", "")
+        except json.JSONDecodeError:
+            pass
+    # Fallback: look for complete=true anywhere in raw
+    if re.search(r'"complete"\s*:\s*true', raw, re.IGNORECASE):
+        return True, "fallback parse"
+    return False, "parse error"

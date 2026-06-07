@@ -4,7 +4,6 @@ Communicates with the Electron renderer via HTTP (localhost:7788).
 """
 
 import base64
-import json
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -34,7 +33,7 @@ class StepRecord:
 @dataclass
 class RunResult:
     task: str
-    mode: str                        # "screenshot" | "hybrid" | "dom"
+    mode: str
     success: bool
     steps: list[StepRecord] = field(default_factory=list)
     total_time_s: float = 0.0
@@ -75,12 +74,11 @@ class ElectronBridge:
     def __init__(self, base_url: str = ELECTRON_BASE):
         self._client = httpx.Client(
             timeout=15.0,
-            transport=httpx.HTTPTransport(proxy=None),  # localhost, no proxy needed
+            transport=httpx.HTTPTransport(proxy=None),
         )
         self.base_url = base_url
 
     def get_screenshot(self) -> tuple[bytes, int, int]:
-        """Returns (png_bytes, width, height)."""
         r = self._client.get(f"{self.base_url}/screenshot")
         r.raise_for_status()
         data = r.json()
@@ -112,56 +110,33 @@ class ElectronBridge:
         r.raise_for_status()
 
     def push_status(self, payload: dict):
-        """Send live status update to the renderer UI."""
         try:
             self._client.post(f"{self.base_url}/status", json=payload, timeout=2.0)
         except Exception:
-            pass   # non-critical
+            pass
 
     def close(self):
         self._client.close()
 
 
-# ── Success detection ─────────────────────────────────────────────────────────
+# ── Success evaluator ─────────────────────────────────────────────────────────
 
-def _check_success(task: str, url: str) -> bool:
+def _evaluate_completion(
+    task: str,
+    screenshot_bytes: bytes,
+    current_url: str,
+    client,
+    screen_w: int,
+    screen_h: int,
+) -> tuple[bool, str]:
     """
-    Heuristic URL-based success detection.
-    Returns True when the current URL strongly suggests the task is complete.
+    Calls client.evaluate() if available, otherwise returns (False, 'not supported').
+    Both OllamaVLMClient and GeminiVLMClient implement evaluate().
+    Called only when the planner outputs 'done' — verifies before accepting.
     """
-    task_lower = task.lower()
-    url_lower = url.lower()
-
-    # Search tasks: results page loaded
-    if any(kw in task_lower for kw in ["search for", "search on", "find"]):
-        if any(kw in url_lower for kw in ["search", "q=", "results", "?s=", "query"]):
-            return True
-
-    # GitHub trending
-    if "trending" in task_lower and "github.com/trending" in url_lower:
-        return True
-
-    # GitHub repo page
-    if "github" in task_lower and "open issues" in task_lower:
-        if "github.com/" in url_lower and "/issues" not in url_lower:
-            # landed on a repo page (not issues list)
-            parts = url_lower.replace("https://github.com/", "").split("/")
-            if len(parts) >= 2:
-                return True
-
-    # Hacker News story
-    if "hacker news" in task_lower and "item?id=" in url_lower:
-        return True
-
-    # Wikipedia article
-    if "wikipedia" in task_lower and "wikipedia.org/wiki/" in url_lower:
-        return True
-
-    # Excalidraw
-    if "excalidraw" in task_lower and "excalidraw.com" in url_lower:
-        return True
-
-    return False
+    if hasattr(client, "evaluate"):
+        return client.evaluate(screenshot_bytes, task, current_url, screen_w, screen_h)
+    return False, "client does not support evaluation"
 
 
 # ── Executor ──────────────────────────────────────────────────────────────────
@@ -172,16 +147,16 @@ class AgentExecutor:
         bridge: ElectronBridge,
         local_client: Optional[OllamaVLMClient] = None,
         remote_client: Optional[GeminiVLMClient] = None,
-        mode: str = "screenshot",      # "screenshot" | "hybrid" | "dom"
+        mode: str = "screenshot",
         max_steps: int = 20,
-        step_delay_s: float = 1.0,
+        step_delay_s: float = 0.3,
     ):
-        self.bridge = bridge
-        self.local_client = local_client
+        self.bridge        = bridge
+        self.local_client  = local_client
         self.remote_client = remote_client
-        self.mode = mode
-        self.max_steps = max_steps
-        self.step_delay_s = step_delay_s
+        self.mode          = mode
+        self.max_steps     = max_steps
+        self.step_delay_s  = step_delay_s
 
     def _get_vlm_client(self):
         if self.mode == "hybrid":
@@ -189,13 +164,13 @@ class AgentExecutor:
         return self.local_client or self.remote_client
 
     def run(self, task: str, start_url: Optional[str] = None) -> RunResult:
-        result = RunResult(task=task, mode=self.mode, success=False)
+        result  = RunResult(task=task, mode=self.mode, success=False)
         history: list[str] = []
         t_start = time.perf_counter()
 
         if start_url:
             self.bridge.navigate(start_url)
-            time.sleep(2.0)   # wait for initial page load
+            time.sleep(2.0)
 
         client = self._get_vlm_client()
         if client is None:
@@ -203,6 +178,7 @@ class AgentExecutor:
             return result
 
         for step_num in range(1, self.max_steps + 1):
+
             # ── Perceive ──
             for _ in range(3):
                 screenshot, w, h = self.bridge.get_screenshot()
@@ -213,25 +189,12 @@ class AgentExecutor:
 
             dom_elements: list[dict] = []
             dom_context: Optional[str] = None
-
             if self.mode in ("hybrid", "dom"):
                 dom_elements = self.bridge.get_dom_elements()
-                # print(f"[executor] dom elements: {[e.get('text') for e in dom_elements]}")
-                dom_context = build_dom_context(dom_elements, w, h)
-                # print(f"[executor] dom context sent to model:\n{dom_context}")  # 加这行
+                dom_context  = build_dom_context(dom_elements, w, h)
 
-            # ── URL-based success check (before planning) ──
             current_url = self.bridge.get_current_url()
             print(f"[executor] step {step_num} url: {current_url}")
-            if _check_success(task, current_url):
-                print(f"[executor] URL-based success detected: {current_url}")
-                result.success = True
-                result.total_time_s = time.perf_counter() - t_start
-                self.bridge.push_status({
-                    "type": "done",
-                    "result": result.to_dict(),
-                })
-                return result
 
             # ── Plan ──
             action, latency = client.get_action(
@@ -256,48 +219,64 @@ class AgentExecutor:
             )
             result.steps.append(step)
 
-            # Push live update to renderer
             self.bridge.push_status({
-                "step": step_num,
-                "thought": action.thought,
-                "action": action.to_dict(),
-                "latency_s": round(latency, 3),
+                "step":       step_num,
+                "thought":    action.thought,
+                "action":     action.to_dict(),
+                "latency_s":  round(latency, 3),
                 "screenshot": step.screenshot_b64,
             })
 
             # ── Terminal states ──
             if action.type == ActionType.DONE:
-                result.success = True
-                break
+                # VLM evaluator confirms completion before accepting
+                print(f"[executor] model said done — running evaluator...")
+                complete, reason = _evaluate_completion(
+                    task, screenshot, current_url, client, w, h
+                )
+                if complete:
+                    print(f"[executor] evaluator confirmed: {reason}")
+                    result.success = True
+                    break
+                else:
+                    print(f"[executor] evaluator rejected: {reason} — continuing")
+                    # Don't break — keep going, model may have been premature
+
             if action.type == ActionType.FAIL:
                 result.failure_reason = action.thought or "model returned fail"
                 break
 
             # ── Loop detection ──
-            # if len(history) >= 3:
-            #     last_3 = [s.split(":")[0] for s in history[-3:]]
-            #     if len(set(last_3)) == 1 and last_3[0] == action.type.value:
-            #         print(f"[executor] loop detected: repeated {action.type.value} 3+ times")
-            #         result.failure_reason = f"stuck in loop: repeated {action.type.value}"
-            #         break
+            if len(history) >= 3:
+                last_3 = [s.split(":")[0] for s in history[-3:]]
+                print(f"[executor] loop check: {last_3}, current: {action.type.value}")
+                if len(set(last_3)) == 1 and last_3[0] == action.type.value:
+                    print(f"[executor] loop detected: repeated {action.type.value} 3+ times")
+                    result.failure_reason = f"stuck in loop: repeated {action.type.value}"
+                    break
 
             # ── Act ──
             try:
                 self.bridge.execute_action(action)
-
-                if action.type == ActionType.TYPE and action.text:
-                    enter_action = AgentAction(type=ActionType.KEY, key="Enter")
-                    self.bridge.execute_action(enter_action)
-                    print(f"[executor] auto Enter after type")
             except httpx.HTTPError as e:
                 result.failure_reason = f"action execution error: {e}"
                 break
 
-            history.append(f"{action.type.value}: x={action.x}, y={action.y}, text={action.text}")
+            # Auto Enter after type
+            if action.type == ActionType.TYPE and action.text:
+                enter_action = AgentAction(type=ActionType.KEY, key="Enter")
+                try:
+                    self.bridge.execute_action(enter_action)
+                    print(f"[executor] auto Enter after type")
+                except Exception:
+                    pass
 
-            # Extra wait after navigation actions to allow page to load
-            # if action.type in (ActionType.KEY, ActionType.CLICK, ActionType.NAVIGATE):
-            #     time.sleep(2.0)
+            history.append(
+                f"{action.type.value}: x={action.x}, y={action.y}, text={action.text}"
+            )
+
+            if action.type == ActionType.NAVIGATE:
+                time.sleep(2.0)
             time.sleep(self.step_delay_s)
 
         else:

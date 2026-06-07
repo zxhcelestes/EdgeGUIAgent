@@ -2,17 +2,20 @@
 VLM Client v2 — Planner + Grounder Architecture
 
 Architecture:
-  Planner  (Qwen2.5-VL-3B via Ollama)
+  Planner  (Qwen2.5-VL via Ollama, 3B or 7B)
       → decides action type + describes the target element in natural language
-  Grounder (GUI-G2-3B via transformers)
+  Grounder (GUI-G2-3B via transformers, CUDA required)
       → maps the element description to precise (x, y) coordinates on screen
 
 For non-click actions (type, scroll, navigate, key), the planner output is used
 directly without calling the grounder.
 
-This module is a drop-in replacement for vlm_client.py — it exports the same
-AgentAction, ActionType, OllamaVLMClient, GeminiVLMClient, build_dom_context
-symbols so executor.py needs no changes.
+NOTE: GUI-G2 requires CUDA. On macOS MPS, the grounder is automatically disabled
+and the system falls back to planner-only mode.
+
+Model selection:
+  OLLAMA_MODEL=qwen2.5vl:3b   (default, M2 16GB)
+  OLLAMA_MODEL=qwen2.5vl:7b   (recommended, 24GB+ VRAM)
 """
 
 import base64
@@ -27,11 +30,10 @@ from typing import Optional
 import httpx
 from PIL import Image
 
-# Re-export grounder
 from gui_g2_client import GUIG2GrounderClient
 
 
-# ── Types (same as vlm_client.py) ─────────────────────────────────────────────
+# ── Types ─────────────────────────────────────────────────────────────────────
 
 class ActionType(str, Enum):
     CLICK    = "click"
@@ -54,23 +56,20 @@ class AgentAction:
     url: Optional[str] = None
     key: Optional[str] = None
     thought: Optional[str] = None
-    # Extra field: natural language description of target element (used by grounder)
-    target_description: Optional[str] = None
+    target_description: Optional[str] = None  # used by grounder, not sent to Electron
     raw: Optional[str] = None
 
     def to_dict(self) -> dict:
         d = {k: v for k, v in self.__dict__.items() if v is not None}
         if "type" in d:
             d["type"] = d["type"].value if hasattr(d["type"], "value") else str(d["type"])
-        d.pop("target_description", None)   # internal field, don't send to Electron
+        d.pop("target_description", None)
         d.pop("raw", None)
         return d
 
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
-# Planner prompt: asks model to describe the target element in natural language
-# instead of outputting raw coordinates — GUI-G2 will handle the grounding.
 PLANNER_SYSTEM_PROMPT = """You are a GUI automation agent. You observe screenshots of a web browser and decide the next action.
 
 For CLICK actions, describe the target element clearly in natural language instead of guessing coordinates.
@@ -81,7 +80,7 @@ Always respond with a JSON object:
   "thought": "<brief reasoning>",
   "action": {
     "type": "<click|type|scroll|navigate|key|done|fail>",
-    "target": "<natural language description of the element to click, e.g. 'the blue Search button', 'the DuckDuckGo search input field'>",
+    "target": "<natural language description of the element to click>",
     "x": <0.0-1.0, only for non-click actions>,
     "y": <0.0-1.0, only for non-click actions>,
     "text": "<string, for type actions>",
@@ -93,9 +92,12 @@ Always respond with a JSON object:
 }
 
 Rules:
-- For click: always fill "target" with a clear description. Omit x/y — the grounder will locate it.
-- For type/scroll/key/navigate/done/fail: fill x/y/text/etc as normal. "target" is optional.
-- Use "done" immediately when the task goal is visibly achieved on screen.
+- For click: always fill "target" with a clear description. Omit x/y.
+- For type/scroll/key/navigate/done/fail: fill x/y/text/etc as normal.
+- Use "done" when the task goal is visibly achieved on screen. Examples:
+  - Search task → done when results page is fully loaded and visible
+  - Navigation task → done when target page URL is loaded
+  - Extraction task → done when the required information is visible on screen
 - Use "fail" only if truly stuck after multiple retries.
 - Respond with JSON only, no markdown, no extra text.
 - Your entire response must be a single valid JSON object.
@@ -109,13 +111,11 @@ Use center x/y values for non-click actions. For click, prefer using "target" de
 """
 
 
-# ── Image helper ──────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _encode_image(image_bytes: bytes) -> str:
     return base64.b64encode(image_bytes).decode("utf-8")
 
-
-# ── Response parser ───────────────────────────────────────────────────────────
 
 def _parse_planner_response(raw: str, screen_w: int, screen_h: int) -> AgentAction:
     print(f"[planner] raw output: {raw[:300]}")
@@ -143,12 +143,10 @@ def _parse_planner_response(raw: str, screen_w: int, screen_h: int) -> AgentActi
     except ValueError:
         action_type = ActionType.FAIL
 
-    # target description for grounder
     target = action_data.get("target") or action_data.get("description")
 
     x = action_data.get("x")
     y = action_data.get("y")
-
     if isinstance(x, list): x = x[0] if x else None
     if isinstance(y, list): y = y[0] if y else None
     try:
@@ -161,8 +159,7 @@ def _parse_planner_response(raw: str, screen_w: int, screen_h: int) -> AgentActi
 
     return AgentAction(
         type=action_type,
-        x=x,
-        y=y,
+        x=x, y=y,
         text=action_data.get("text"),
         direction=action_data.get("direction"),
         amount=action_data.get("amount"),
@@ -179,11 +176,11 @@ def _parse_planner_response(raw: str, screen_w: int, screen_h: int) -> AgentActi
 class OllamaVLMClient:
     """
     Two-stage client:
-      1. Ollama (Qwen2.5-VL-3B) acts as planner — decides action type and
-         describes the target element in natural language
-      2. GUI-G2-3B acts as grounder — maps element description to coordinates
+      1. Ollama planner (3B or 7B) — decides action type, describes click targets
+      2. GUI-G2 grounder (CUDA only) — maps description to precise coordinates
 
-    If GUI-G2 is not available or grounding fails, falls back to planner coordinates.
+    Falls back to planner-only if GUI-G2 is unavailable (macOS, no CUDA).
+    Supports 7B model via OLLAMA_MODEL env var for 24GB+ environments.
     """
 
     def __init__(
@@ -200,13 +197,21 @@ class OllamaVLMClient:
             timeout=timeout,
             transport=httpx.HTTPTransport(proxy=None),
         )
+
+        # Grounder disabled on macOS (MPS bfloat16 unsupported, CPU too slow)
         self._grounder = GUIG2GrounderClient(grounder_model_path)
-        self._grounder_available = self._grounder.is_available()
-        if self._grounder_available:
-            print(f"[planner+grounder] GUI-G2 found at {grounder_model_path}")
+        self._grounder_available = False  # set True only on CUDA environments
+        if self._grounder.is_available():
+            import torch
+            if torch.cuda.is_available():
+                self._grounder_available = True
+                print(f"[planner+grounder] GUI-G2 enabled (CUDA) at {grounder_model_path}")
+            else:
+                print(f"[planner+grounder] GUI-G2 found but disabled (no CUDA) — planner-only mode")
         else:
-            print(f"[planner+grounder] GUI-G2 not found at {grounder_model_path}, "
-                  f"running planner-only mode")
+            print(f"[planner+grounder] GUI-G2 not found at {grounder_model_path} — planner-only mode")
+
+        print(f"[planner+grounder] planner model: {model}")
 
     def is_available(self) -> bool:
         try:
@@ -224,6 +229,7 @@ class OllamaVLMClient:
         screen_w: int,
         screen_h: int,
     ) -> tuple[AgentAction, float]:
+
         # ── Stage 1: Planner ──
         history_text = "\n".join(f"Step {i+1}: {h}" for i, h in enumerate(history))
         prompt_parts = [f"Task: {task}"]
@@ -266,7 +272,7 @@ class OllamaVLMClient:
             resp.json()["message"]["content"], screen_w, screen_h
         )
 
-        # ── Stage 2: Grounder (only for click actions with a target description) ──
+        # ── Stage 2: Grounder (CUDA only, click actions only) ──
         if (
             action.type == ActionType.CLICK
             and action.target_description
@@ -285,25 +291,58 @@ class OllamaVLMClient:
                 print(f"[grounder] result: ({gx:.3f}, {gy:.3f}) in {g_latency:.1f}s")
                 action.x = gx
                 action.y = gy
-                action.thought = (
-                    f"{action.thought or ''} | grounder: ({gx:.3f}, {gy:.3f})"
-                )
+                action.thought = f"{action.thought or ''} | grounder: ({gx:.3f}, {gy:.3f})"
             else:
                 print("[grounder] grounding failed, using planner fallback coords")
                 total_latency = planner_latency
-            
-            print(f"[after grounding] action.type={action.type}, action.x={action.x}, action.y={action.y}")
-
         else:
             total_latency = planner_latency
 
         return action, total_latency
 
+    def evaluate(
+        self,
+        screenshot_bytes: bytes,
+        task: str,
+        current_url: str,
+        screen_w: int,
+        screen_h: int,
+    ) -> tuple[bool, str]:
+        """
+        Dedicated evaluator call — separate system prompt, no action format.
+        Returns (is_complete, reason).
+        """
+        from vlm_client import EVAL_SYSTEM_PROMPT, _parse_eval_response
+        prompt = (
+            f"Task: {task}\n"
+            f"Current URL: {current_url}\n\n"
+            "Has this task been fully completed based on what you see in the screenshot?"
+        )
+        b64 = _encode_image(screenshot_bytes)
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": EVAL_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt, "images": [b64]},
+            ],
+            "stream": False,
+            "options": {"temperature": 0.0},
+        }
+        try:
+            resp = self._client.post(f"{self.base_url}/api/chat", json=payload)
+            resp.raise_for_status()
+            raw = resp.json()["message"]["content"]
+            print(f"[eval] raw: {raw[:150]}")
+            return _parse_eval_response(raw)
+        except Exception as e:
+            print(f"[eval] error: {e}")
+            return False, f"evaluator error: {e}"
+
     def close(self):
         self._client.close()
 
 
-# ── Gemini client (hybrid mode, unchanged) ────────────────────────────────────
+# ── Gemini client (hybrid mode) ───────────────────────────────────────────────
 
 try:
     from google import genai
@@ -314,7 +353,7 @@ except ImportError:
 
 
 class GeminiVLMClient:
-    """Remote Gemini Flash planner (hybrid mode). No grounder — Gemini has strong coordinate prediction."""
+    """Remote Gemini Flash planner (hybrid mode). No grounder needed — strong coord prediction."""
 
     def __init__(self, api_key: str, model: str = "gemini-2.0-flash-lite"):
         if not _GENAI_AVAILABLE:
@@ -357,11 +396,42 @@ class GeminiVLMClient:
         action = _parse_action_response(response.text, screen_w, screen_h)
         return action, latency
 
+    def evaluate(
+        self,
+        screenshot_bytes: bytes,
+        task: str,
+        current_url: str,
+        screen_w: int,
+        screen_h: int,
+    ) -> tuple[bool, str]:
+        """Dedicated evaluator call for Gemini hybrid mode."""
+        from vlm_client import EVAL_SYSTEM_PROMPT, _parse_eval_response
+        prompt = (
+            f"Task: {task}\n"
+            f"Current URL: {current_url}\n\n"
+            "Has this task been fully completed based on what you see in the screenshot?"
+        )
+        image = Image.open(io.BytesIO(screenshot_bytes))
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=[prompt, image],
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=EVAL_SYSTEM_PROMPT,
+                    temperature=0.0,
+                ),
+            )
+            print(f"[eval] raw: {response.text[:150]}")
+            return _parse_eval_response(response.text)
+        except Exception as e:
+            print(f"[eval] gemini error: {e}")
+            return False, f"evaluator error: {e}"
+
     def close(self):
         pass
 
 
-# ── DOM context builder (same as vlm_client.py) ───────────────────────────────
+# ── DOM context builder ───────────────────────────────────────────────────────
 
 def build_dom_context(elements: list[dict], screen_w: int, screen_h: int) -> str:
     screen_w = screen_w or 1280
@@ -369,7 +439,7 @@ def build_dom_context(elements: list[dict], screen_w: int, screen_h: int) -> str
 
     form_els = [e for e in elements if e.get("tag") in ("input", "button", "textarea", "select")][:10]
     used_texts = {e.get("text", "") for e in form_els}
-    nav_links  = [
+    nav_links = [
         e for e in elements
         if e.get("tag") == "a"
         and 0 < len(e.get("text") or "") < 30

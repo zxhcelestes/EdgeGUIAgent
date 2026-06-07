@@ -1,19 +1,22 @@
 """
 Agent HTTP Server v2 — Planner + GUI-G2 Grounder Architecture
 
+Identical to server.py except it uses vlm_client_g2.OllamaVLMClient,
+which adds GUI-G2 grounding for click actions on CUDA environments.
+On macOS / no CUDA, automatically falls back to planner-only mode.
+
 Usage:
-    # With GUI-G2 grounder (download model first)
+    # Standard (planner-only on macOS, planner+grounder on CUDA)
     uvicorn server_g2:app --host 127.0.0.1 --port 8000 --reload
 
-    # Point to a custom model path
+    # With 7B planner (24GB+ VRAM)
+    OLLAMA_MODEL=qwen2.5vl:7b uvicorn server_g2:app ...
+
+    # Custom grounder path
     GROUNDER_MODEL_PATH=/path/to/GUI-G2-3B uvicorn server_g2:app ...
 
-    # Download GUI-G2-3B first:
-    pip install huggingface_hub
+    # Download GUI-G2-3B (CUDA environments only):
     huggingface-cli download inclusionAI/GUI-G2-3B --local-dir ./models/GUI-G2-3B
-
-This server is identical to server.py except it uses vlm_client_g2.OllamaVLMClient
-which adds GUI-G2 grounding for click actions.
 """
 
 import asyncio
@@ -33,11 +36,13 @@ from vlm_client_g2 import OllamaVLMClient, GeminiVLMClient
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-OLLAMA_MODEL         = os.getenv("OLLAMA_MODEL",         "qwen2.5vl:3b")
-OLLAMA_URL           = os.getenv("OLLAMA_URL",           "http://localhost:11434")
-GEMINI_KEY           = os.getenv("GEMINI_API_KEY",       "")
-ELECTRON_URL         = os.getenv("ELECTRON_URL",         "http://localhost:7788")
-GROUNDER_MODEL_PATH  = os.getenv("GROUNDER_MODEL_PATH",  "./models/GUI-G2-3B")
+OLLAMA_MODEL        = os.getenv("OLLAMA_MODEL",        "qwen2.5vl:3b")
+OLLAMA_URL          = os.getenv("OLLAMA_URL",          "http://localhost:11434")
+GEMINI_KEY          = os.getenv("GEMINI_API_KEY",      "")
+ELECTRON_URL        = os.getenv("ELECTRON_URL",        "http://localhost:7788")
+GROUNDER_MODEL_PATH = os.getenv("GROUNDER_MODEL_PATH", "./models/GUI-G2-3B")
+STEP_DELAY          = float(os.getenv("STEP_DELAY",    "0.3"))
+MAX_STEPS           = int(os.getenv("MAX_STEPS",       "20"))
 
 
 # ── Global state ──────────────────────────────────────────────────────────────
@@ -46,14 +51,19 @@ _status_queue: asyncio.Queue = asyncio.Queue()
 _results: list[dict] = []
 _running = False
 
-local_client:  Optional[OllamaVLMClient]  = None
-remote_client: Optional[GeminiVLMClient]  = None
-bridge:        Optional[ElectronBridge]   = None
+local_client:  Optional[OllamaVLMClient] = None
+remote_client: Optional[GeminiVLMClient] = None
+bridge:        Optional[ElectronBridge]  = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global local_client, remote_client, bridge
+
+    print(f"[server_g2] planner model:    {OLLAMA_MODEL}")
+    print(f"[server_g2] grounder path:    {GROUNDER_MODEL_PATH}")
+    print(f"[server_g2] step_delay:       {STEP_DELAY}s")
+    print(f"[server_g2] max_steps:        {MAX_STEPS}")
 
     local_client = OllamaVLMClient(
         model=OLLAMA_MODEL,
@@ -64,8 +74,9 @@ async def lifespan(app: FastAPI):
         remote_client = GeminiVLMClient(api_key=GEMINI_KEY)
     bridge = ElectronBridge(base_url=ELECTRON_URL)
 
-    if local_client._grounder.is_available():
-        print("[startup] Pre-loading GUI-G2 model...")
+    # Pre-load GUI-G2 only if CUDA is available
+    if local_client._grounder_available:
+        print("[startup] Pre-loading GUI-G2 model on CUDA...")
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, local_client._grounder._ensure_loaded)
         print("[startup] GUI-G2 ready")
@@ -93,7 +104,7 @@ class RunRequest(BaseModel):
     task: str
     start_url: Optional[str] = None
     mode: str = "screenshot"
-    max_steps: int = 20
+    max_steps: int = MAX_STEPS
 
 
 class RunResponse(BaseModel):
@@ -105,14 +116,16 @@ class RunResponse(BaseModel):
 
 @app.get("/health")
 async def health():
-    ollama_ok = local_client.is_available() if local_client else False
-    grounder_ok = local_client._grounder.is_available() if local_client else False
+    ollama_ok    = local_client.is_available() if local_client else False
+    grounder_ok  = local_client._grounder_available if local_client else False
     return {
-        "status":   "ok",
-        "ollama":   ollama_ok,
-        "grounder": grounder_ok,
-        "gemini":   bool(GEMINI_KEY),
-        "running":  _running,
+        "status":     "ok",
+        "ollama":     ollama_ok,
+        "model":      OLLAMA_MODEL,
+        "grounder":   grounder_ok,
+        "gemini":     bool(GEMINI_KEY),
+        "running":    _running,
+        "step_delay": STEP_DELAY,
     }
 
 
@@ -132,8 +145,11 @@ async def _run_agent(req: RunRequest):
 
     def _sync_run():
         print(f"[agent] run started")
-        print(f"[agent] starting task: {req.task}")
-        print(f"[agent] mode: {req.mode}, start_url: {req.start_url}")
+        print(f"[agent] task:      {req.task}")
+        print(f"[agent] mode:      {req.mode}")
+        print(f"[agent] model:     {OLLAMA_MODEL}")
+        print(f"[agent] grounder:  {local_client._grounder_available}")
+        print(f"[agent] start_url: {req.start_url}")
 
         executor = AgentExecutor(
             bridge=bridge,
@@ -141,7 +157,7 @@ async def _run_agent(req: RunRequest):
             remote_client=remote_client if req.mode == "hybrid"  else None,
             mode=req.mode,
             max_steps=req.max_steps,
-            step_delay_s=0.3,
+            step_delay_s=STEP_DELAY,
         )
 
         def _push(payload):
@@ -157,15 +173,6 @@ async def _run_agent(req: RunRequest):
     except Exception as e:
         print(f"[agent] error: {e}")
         import traceback; traceback.print_exc()
-        _results.append({
-            "task": req.task,
-            "mode": req.mode,
-            "success": False,
-            "step_count": 0,
-            "total_time_s": 0.0,
-            "avg_latency_s": 0.0,
-            "failure_reason": str(e),
-        })
         await _status_queue.put({"type": "error", "message": str(e)})
     finally:
         _running = False
