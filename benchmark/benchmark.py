@@ -35,87 +35,25 @@ class Task:
 
 
 TASKS: list[Task] = [
-    # --- Form filling ---
     Task(
-        id="form_contact",
-        name="Fill contact form",
-        description="Fill in name='Test User', email='test@example.com', message='Hello world' and submit",
-        start_url="https://httpbin.org/forms/post",
-        success_criteria="Form submitted, response page shows submitted values",
-        category="form_fill",
-        playwright_possible=True,
-    ),
-    Task(
-        id="form_search",
-        name="Search on DuckDuckGo",
-        description="Search for 'open source GUI agents 2025' and confirm results page loaded",
-        start_url="https://duckduckgo.com",
-        success_criteria="Results page shows relevant results",
-        category="form_fill",
-        playwright_possible=True,
-    ),
-
-    # --- Navigation ---
-    Task(
-        id="nav_github",
-        name="Navigate to GitHub trending",
-        description="Go to GitHub and navigate to the Trending, an Open Source repositories page",
-        start_url="https://github.com",
-        success_criteria="URL contains /trending or page shows trending repos",
-        category="navigation",
-        playwright_possible=True,
-    ),
-    Task(
-        id="nav_hacker_news",
-        name="Open top HN story",
-        description="Click on the first story link on Hacker News front page",
-        start_url="https://news.ycombinator.com",
-        success_criteria="New page loaded at an external URL from HN",
-        category="navigation",
-        playwright_possible=True,
-    ),
-
-    # --- Information extraction ---
-    Task(
-        id="extract_title",
-        name="Extract page title",
-        description="Navigate to Wikipedia's 'Artificial intelligence' article and report the first sentence of the lead paragraph",
-        start_url="https://en.wikipedia.org/wiki/Artificial_intelligence",
-        success_criteria="Agent outputs first sentence correctly",
-        category="extraction",
-        playwright_possible=True,
-    ),
-
-    # --- Multi-step workflows ---
-    Task(
-        id="multi_github_search",
-        name="GitHub repo search and inspect",
-        description="Search GitHub for 'gui agent electron', open the most starred result, and find the number of open issues",
-        start_url="https://github.com/search?q=gui+agent+electron&type=repositories",
-        success_criteria="Agent reports open issue count from the most starred repo",
+        id="github_readme_extract",
+        name="GitHub README code block extraction",
+        description="Search GitHub for 'ui-tars', open the most starred repository, find the first code block in the README and report its content",
+        start_url="https://github.com/search?q=ui-tars&type=repositories&s=stars&o=desc",
+        success_criteria="Agent reports the content of the first code block in the README",
         category="multi_step",
-        playwright_possible=False,  # dynamic results make scripted approach fragile
+        playwright_possible=False,
+        notes="Requires: search result selection + page navigation + content extraction",
     ),
     Task(
-        id="multi_scroll_load",
-        name="Infinite scroll extraction",
-        description="On Hacker News, scroll down to load all visible items and count how many stories are on the front page",
-        start_url="https://news.ycombinator.com",
-        success_criteria="Agent reports a count between 25-35",
+        id="wikipedia_cross_page",
+        name="Wikipedia cross-page navigation",
+        description="On the Wikipedia page for 'Transformer (machine learning)', find and click the link to 'Attention mechanism', then report the first sentence of that page",
+        start_url="https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)",
+        success_criteria="Agent reports the first sentence of the Attention mechanism Wikipedia page",
         category="multi_step",
         playwright_possible=True,
-    ),
-
-    # --- Canvas / no stable selectors (Playwright disadvantage) ---
-    Task(
-        id="canvas_excalidraw",
-        name="Excalidraw canvas interaction",
-        description="On Excalidraw, select the rectangle tool and draw a shape",
-        start_url="https://excalidraw.com",
-        success_criteria="A rectangle appears on the canvas",
-        category="multi_step",
-        playwright_possible=False,   # canvas-rendered, no DOM selectors
-        notes="Key differentiator: DOM-based agents cannot handle this",
+        notes="Tests in-text link navigation and cross-page content extraction",
     ),
 ]
 
