@@ -167,6 +167,20 @@ async function executeAction(action) {
     }
     case 'type': {
       if (action.text) {
+        // Step 1: click to focus the input at given coordinates
+        if (action.x != null && action.y != null) {
+          const px = Math.round((action.x ?? 0.5) * W);
+          const py = Math.round((action.y ?? 0.5) * H);
+          wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
+          wc.sendInputEvent({ type: 'mouseDown', button: 'left', x: px, y: py, clickCount: 1 });
+          wc.sendInputEvent({ type: 'mouseUp',   button: 'left', x: px, y: py, clickCount: 1 });
+          await new Promise(r => setTimeout(r, 150));
+        }
+        // Step 2: select all existing content and replace
+        wc.sendInputEvent({ type: 'keyDown', keyCode: 'a', modifiers: ['meta'] });
+        wc.sendInputEvent({ type: 'keyUp',   keyCode: 'a', modifiers: ['meta'] });
+        await new Promise(r => setTimeout(r, 50));
+        // Step 3: type the text
         await wc.executeJavaScript(INPUT_SCRIPT(action.text)).catch(() => {});
         for (const char of action.text) {
           wc.sendInputEvent({ type: 'char', keyCode: char });
