@@ -273,6 +273,7 @@ class AgentExecutor:
             })
 
             # ── Terminal states ──
+            print(f"[executor] checking terminal: {action.type.value}")
             if action.type == ActionType.DONE:
                 print(f"[executor] model said done — running evaluator...")
                 complete, reason = _evaluate_completion(
@@ -293,6 +294,7 @@ class AgentExecutor:
                 break
 
             # ── Loop detection: same coordinates ──
+            print(f"[executor] checking loop detection")
             if _is_coord_loop(history, action):
                 print(f"[executor] coord loop detected: same (x,y) repeated 3+ times")
                 result.failure_reason = (
@@ -314,6 +316,7 @@ class AgentExecutor:
                     break
 
             # ── Act ──
+            print(f"[executor] about to act: {action.type.value}")
             try:
                 self.bridge.execute_action(action)
             except httpx.HTTPError as e:
