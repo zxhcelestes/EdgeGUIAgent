@@ -167,21 +167,35 @@ async function executeAction(action) {
     }
     case 'type': {
       if (action.text) {
-        // Step 1: click to focus the input at given coordinates
-        if (action.x != null && action.y != null) {
-          const px = Math.round((action.x ?? 0.5) * W);
-          const py = Math.round((action.y ?? 0.5) * H);
-          wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
+        const px = action.x != null ? Math.round(action.x * W) : null;
+        const py = action.y != null ? Math.round(action.y * H) : null;
+
+        // Step 1: focus via JS + native click
+        if (px != null && py != null) {
+          await wc.executeJavaScript(`
+            (function() {
+              const el = document.elementFromPoint(${px}, ${py});
+              if (el) { el.focus(); }
+            })();
+          `).catch(() => {});
+          await new Promise(r => setTimeout(r, 100));
           wc.sendInputEvent({ type: 'mouseDown', button: 'left', x: px, y: py, clickCount: 1 });
           wc.sendInputEvent({ type: 'mouseUp',   button: 'left', x: px, y: py, clickCount: 1 });
           await new Promise(r => setTimeout(r, 150));
         }
-        // Step 2: select all existing content and replace
+
+        // Step 2: select all and clear BEFORE writing
         wc.sendInputEvent({ type: 'keyDown', keyCode: 'a', modifiers: ['meta'] });
         wc.sendInputEvent({ type: 'keyUp',   keyCode: 'a', modifiers: ['meta'] });
         await new Promise(r => setTimeout(r, 50));
-        // Step 3: type the text
-        await wc.executeJavaScript(INPUT_SCRIPT(action.text)).catch(() => {});
+        wc.sendInputEvent({ type: 'keyDown', keyCode: 'Backspace' });
+        wc.sendInputEvent({ type: 'keyUp',   keyCode: 'Backspace' });
+        await new Promise(r => setTimeout(r, 50));
+
+        // Step 3: set value via React-compatible setter
+        await wc.executeJavaScript(CLEAR_AND_SET_SCRIPT(action.text)).catch(() => {});
+
+        // Step 4: char events as fallback (only if JS setter didn't work)
         for (const char of action.text) {
           wc.sendInputEvent({ type: 'char', keyCode: char });
         }
