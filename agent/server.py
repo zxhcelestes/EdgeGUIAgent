@@ -166,7 +166,7 @@ async def _run_agent(req: RunRequest):
         _results.append(result.to_dict())
         await _status_queue.put({"type": "done", "result": result.to_dict()})
     except Exception as e:
-        print(f"[agent] error: {e}")
+        print(f"[agent] error: {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
         await _status_queue.put({"type": "error", "message": str(e)})

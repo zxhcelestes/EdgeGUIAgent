@@ -319,7 +319,7 @@ class AgentExecutor:
             print(f"[executor] about to act: {action.type.value}")
             try:
                 self.bridge.execute_action(action)
-            except httpx.HTTPError as e:
+            except Exception as e:
                 result.failure_reason = f"action execution error: {e}"
                 break
 
