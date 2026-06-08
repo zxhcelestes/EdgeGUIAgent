@@ -1,0 +1,7 @@
+
+# Python virtualenv
+agent/venv/
+
+# Node dependencies & lockfile
+electron-app/node_modules/
+electron-app/package-lock.json
