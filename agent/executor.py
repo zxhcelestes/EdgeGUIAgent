@@ -82,11 +82,20 @@ class ElectronBridge:
         self.base_url = base_url
 
     def get_screenshot(self) -> tuple[bytes, int, int]:
-        r = self._client.get(f"{self.base_url}/screenshot")
-        r.raise_for_status()
-        data = r.json()
-        png = base64.b64decode(data["image"])
-        return png, data["width"], data["height"]
+        for attempt in range(5):
+            try:
+                r = self._client.get(f"{self.base_url}/screenshot")
+                r.raise_for_status()
+                data = r.json()
+                png = base64.b64decode(data["image"])
+                return png, data["width"], data["height"]
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 500 and attempt < 4:
+                    print(f"[bridge] screenshot 500, retrying in 2s... ({attempt+1}/5)")
+                    time.sleep(2.0)
+                    continue
+                raise
+        raise RuntimeError("screenshot failed after 5 attempts")
 
     def get_dom_elements(self) -> list[dict]:
         r = self._client.get(f"{self.base_url}/dom")
@@ -249,7 +258,7 @@ class AgentExecutor:
 
         if start_url:
             self.bridge.navigate(start_url)
-            time.sleep(2.0)
+            time.sleep(3.0)
 
         client = self._get_vlm_client()
         if client is None:
