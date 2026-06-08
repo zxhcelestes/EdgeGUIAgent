@@ -284,6 +284,7 @@ function startBridge() {
       const result = await executeAction(req.body);
       res.json(result);
     } catch (e) {
+      console.error('[action] error:', e.message, e.stack);
       res.status(500).json({ error: e.message });
     }
   });
