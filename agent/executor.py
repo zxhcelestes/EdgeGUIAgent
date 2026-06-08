@@ -152,49 +152,6 @@ def _evaluate_completion(
     return False, "client does not support evaluation"
 
 
-# ── URL-based completion heuristics ──────────────────────────────────────────
-
-def _url_suggests_completion(task: str, url: str) -> bool:
-    """
-    Lightweight check: does the current URL strongly suggest the task is done?
-    Used as a trigger for the evaluator — does NOT directly mark success.
-    """
-    task_lower = task.lower()
-    url_lower  = url.lower()
-
-    # Search tasks
-    if any(kw in task_lower for kw in ["search for", "search on", "search github"]):
-        if any(kw in url_lower for kw in ["q=", "search", "results"]):
-            return True
-
-    # GitHub Trending
-    if "trending" in task_lower and "github.com/trending" in url_lower:
-        return True
-
-    # Wikipedia cross-page: landed on Attention article
-    if "wikipedia" in task_lower and "wikipedia.org/wiki/" in url_lower:
-        if "attention" in url_lower or "mechanism" in url_lower:
-            return True
-
-    # Hacker News story page
-    if "hacker news" in task_lower and "item?id=" in url_lower:
-        return True
-
-    # HuggingFace model page
-    if "huggingface" in task_lower and "download" in task_lower:
-        if "huggingface.co/" in url_lower and "/models" not in url_lower and "search" not in url_lower:
-            return True
-
-    # GitHub repo page (for repo inspection tasks)
-    if "github" in task_lower and "readme" in task_lower:
-        if "github.com/" in url_lower and "/search" not in url_lower:
-            parts = url_lower.replace("https://github.com/", "").split("/")
-            if len(parts) >= 2 and parts[0] and parts[1]:
-                return True
-
-    return False
-
-
 # ── Loop detection helpers ────────────────────────────────────────────────────
 
 def _extract_coords(history_entry: str) -> Optional[tuple[float, float]]:
@@ -283,21 +240,6 @@ class AgentExecutor:
 
             current_url = self.bridge.get_current_url()
             print(f"[executor] step {step_num} url: {current_url}")
-
-            # ── URL heuristic: trigger evaluator proactively ──
-            if _url_suggests_completion(task, current_url):
-                print(f"[executor] URL suggests completion — running evaluator...")
-                complete, reason = _evaluate_completion(
-                    task, screenshot, current_url, client, w, h
-                )
-                if complete:
-                    print(f"[executor] evaluator confirmed via URL heuristic: {reason}")
-                    result.success = True
-                    result.total_time_s = time.perf_counter() - t_start
-                    self.bridge.push_status({"type": "done", "result": result.to_dict()})
-                    return result
-                else:
-                    print(f"[executor] evaluator rejected URL heuristic: {reason} — continuing")
 
             # ── Plan ──
             action, latency = client.get_action(
