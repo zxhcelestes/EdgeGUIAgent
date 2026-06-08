@@ -326,11 +326,10 @@ class AgentExecutor:
                 try:
                     self.bridge.execute_action(enter_action)
                     print(f"[executor] auto Enter after type")
-                    print(f"[executor] step {step_num} completed, continuing to step {step_num+1}")
                 except Exception as e:
                     print(f"[executor] auto Enter error: {e}")
 
-            print(f"[executor] step {step_num} completed, continuing to step {step_num+1}")
+            print(f"[executor] appending to history: {action.type.value}")
             history.append(
                 f"{action.type.value}: x={action.x}, y={action.y}, text={action.text}"
             )
@@ -338,6 +337,8 @@ class AgentExecutor:
             if action.type == ActionType.NAVIGATE:
                 time.sleep(2.0)
             time.sleep(self.step_delay_s)
+
+            print(f"[executor] step {step_num} done, loop continues")
 
         else:
             result.failure_reason = f"max steps ({self.max_steps}) reached"
