@@ -1,11 +1,11 @@
 """
 Benchmark Runner
 
-Runs all tasks across all modes, collects metrics, outputs a JSON + Markdown report.
+Runs tasks across modes, collects metrics, outputs JSON + Markdown report.
 
 Usage:
-    python benchmark.py --modes screenshot hybrid --output results/
-    python benchmark.py --modes screenshot --tasks form_fill navigation   # subset
+    python benchmark.py --modes screenshot dom --output results/
+    python benchmark.py --modes screenshot dom --tasks form_search nav_github
 """
 
 import argparse
@@ -28,32 +28,32 @@ class Task:
     name: str
     description: str
     start_url: str
-    success_criteria: str           # human-readable, for the report
-    category: str                   # "form_fill" | "navigation" | "extraction" | "multi_step"
-    playwright_possible: bool = True  # can Playwright handle this with selectors?
+    success_criteria: str
+    category: str
+    playwright_possible: bool = True
     notes: str = ""
 
 
 TASKS: list[Task] = [
     Task(
-        id="github_readme_extract",
-        name="GitHub README code block extraction",
-        description="Search GitHub for 'ui-tars', open the most starred repository, find the first code block in the README and report its content",
-        start_url="https://github.com/search?q=ui-tars&type=repositories&s=stars&o=desc",
-        success_criteria="Agent reports the content of the first code block in the README",
+        id="huggingface_model_info",
+        name="HuggingFace model page extraction",
+        description="Go to HuggingFace and search for 'qwen2.5-vl', open the first result, and report the model's download count shown on the page",
+        start_url="https://huggingface.co",
+        success_criteria="Agent reports the download count of the top qwen2.5-vl model",
         category="multi_step",
         playwright_possible=False,
-        notes="Requires: search result selection + page navigation + content extraction",
+        notes="Tests: result selection + page navigation + numeric data extraction. No login required.",
     ),
     Task(
         id="wikipedia_cross_page",
         name="Wikipedia cross-page navigation",
-        description="On the Wikipedia page for 'Transformer (machine learning)', find and click the link to 'Attention mechanism', then report the first sentence of that page",
-        start_url="https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)",
+        description="On Wikipedia, search for 'Transformer deep learning', click into the article, then find and click the 'Attention' link within the article, and report the first sentence of that page",
+        start_url="https://en.wikipedia.org/wiki/Main_Page",
         success_criteria="Agent reports the first sentence of the Attention mechanism Wikipedia page",
         category="multi_step",
         playwright_possible=True,
-        notes="Tests in-text link navigation and cross-page content extraction",
+        notes="Tests: search → article → in-text link navigation → content extraction",
     ),
 ]
 
@@ -74,6 +74,7 @@ class TaskResult:
     total_time_s: float
     avg_latency_s: float
     failure_reason: Optional[str]
+    final_answer: Optional[str] = None
 
 
 @dataclass
@@ -90,21 +91,33 @@ class BenchmarkReport:
                 continue
             successes = [r for r in mode_results if r.success]
             out[mode] = {
-                "success_rate": round(len(successes) / len(mode_results), 3),
-                "avg_steps": round(statistics.mean(r.step_count for r in mode_results), 2),
+                "success_rate":     round(len(successes) / len(mode_results), 3),
+                "avg_steps":        round(statistics.mean(r.step_count for r in mode_results), 2),
                 "avg_total_time_s": round(statistics.mean(r.total_time_s for r in mode_results), 2),
-                "avg_latency_s": round(statistics.mean(r.avg_latency_s for r in mode_results), 3),
-                "n_tasks": len(mode_results),
-                "n_success": len(successes),
+                "avg_latency_s":    round(statistics.mean(r.avg_latency_s for r in mode_results), 3),
+                "n_tasks":          len(mode_results),
+                "n_success":        len(successes),
             }
         return out
 
     def to_dict(self) -> dict:
         return {
-            "timestamp": self.timestamp,
-            "modes": self.modes,
-            "summary_by_mode": self.summary_by_mode(),
-            "task_results": [r.__dict__ for r in self.task_results],
+            "timestamp":        self.timestamp,
+            "modes":            self.modes,
+            "summary_by_mode":  self.summary_by_mode(),
+            "task_results": [
+                {
+                    "task_id":       r.task_id,
+                    "mode":          r.mode,
+                    "success":       r.success,
+                    "step_count":    r.step_count,
+                    "total_time_s":  r.total_time_s,
+                    "avg_latency_s": r.avg_latency_s,
+                    "failure_reason": r.failure_reason,
+                    "final_answer":  r.final_answer,
+                }
+                for r in self.task_results
+            ],
         }
 
     def to_markdown(self) -> str:
@@ -122,10 +135,11 @@ class BenchmarkReport:
                 f"| {mode} | {sr} | {s['avg_steps']} | {s['avg_total_time_s']}s | {s['avg_latency_s']}s |"
             )
 
-        lines += ["\n## Task-level Results\n",
-                  "| Task | Category | Playwright? | " + " | ".join(self.modes) + " |",
-                  "|------|----------|------------|" + "|".join(["---"] * len(self.modes)) + "|"]
-
+        lines += [
+            "\n## Task-level Results\n",
+            "| Task | Category | Playwright? | " + " | ".join(self.modes) + " |",
+            "|------|----------|------------|" + "|".join(["---"] * len(self.modes)) + "|",
+        ]
         for task in TASKS:
             row = [task.name, task.category, "✓" if task.playwright_possible else "✗"]
             for mode in self.modes:
@@ -136,11 +150,21 @@ class BenchmarkReport:
                 if res is None:
                     row.append("—")
                 elif res.success:
-                    row.append(f"✓ {res.step_count}steps {res.total_time_s:.1f}s")
+                    answer = f" → {res.final_answer[:30]}" if res.final_answer else ""
+                    row.append(f"✓ {res.step_count}steps {res.total_time_s:.1f}s{answer}")
                 else:
                     reason = (res.failure_reason or "failed")[:30]
                     row.append(f"✗ {reason}")
             lines.append("| " + " | ".join(row) + " |")
+
+        lines += [
+            "\n## Extracted Answers\n",
+            "| Task | Mode | Answer |",
+            "|------|------|--------|",
+        ]
+        for r in self.task_results:
+            if r.final_answer:
+                lines.append(f"| {r.task_id} | {r.mode} | {r.final_answer[:80]} |")
 
         lines += [
             "\n## Failure Mode Analysis\n",
@@ -153,6 +177,7 @@ class BenchmarkReport:
 
         return "\n".join(lines)
 
+
 def run_task_via_api(
     task: Task,
     mode: str,
@@ -161,6 +186,7 @@ def run_task_via_api(
 ) -> TaskResult:
     print(f"  [{mode}] {task.id}: {task.description[:60]}…")
 
+    # Wait for agent to be free
     for _ in range(60):
         try:
             h = client.get(f"{AGENT_SERVER}/health", timeout=3.0).json()
@@ -173,10 +199,10 @@ def run_task_via_api(
     resp = client.post(
         f"{AGENT_SERVER}/run",
         json={
-            "task": task.description,
-            "start_url": task.start_url,
-            "mode": mode,
-            "max_steps": 15,
+            "task":       task.description,
+            "start_url":  task.start_url,
+            "mode":       mode,
+            "max_steps":  15,
         },
         timeout=10.0,
     )
@@ -211,6 +237,7 @@ def run_task_via_api(
                         total_time_s=r["total_time_s"],
                         avg_latency_s=r["avg_latency_s"],
                         failure_reason=r.get("failure_reason"),
+                        final_answer=r.get("final_answer"),
                     )
         except Exception:
             continue
@@ -220,6 +247,7 @@ def run_task_via_api(
         step_count=0, total_time_s=timeout, avg_latency_s=0.0,
         failure_reason="benchmark timeout",
     )
+
 
 def run_benchmark(
     modes: list[str],
@@ -234,17 +262,16 @@ def run_benchmark(
     )
 
     with httpx.Client(timeout=10.0) as client:
-        # Health check
         try:
             health = client.get(f"{AGENT_SERVER}/health").json()
-            print(f"Agent server: ollama={health.get('ollama')}, gemini={health.get('gemini')}")
+            print(f"Agent server: ollama={health.get('ollama')}, "
+                  f"model={health.get('model')}, gemini={health.get('gemini')}")
         except Exception as e:
-            print(f"Warning: cannot reach agent server at {AGENT_SERVER}: {e}")
+            print(f"Warning: cannot reach agent server: {e}")
 
         for mode in modes:
             print(f"\n=== Mode: {mode} ===")
             for task in tasks:
-                # Skip hybrid tasks if no Gemini key
                 if mode == "hybrid" and not os.getenv("GEMINI_API_KEY"):
                     print(f"  [hybrid] skipping {task.id} — no GEMINI_API_KEY")
                     report.task_results.append(TaskResult(
@@ -257,10 +284,10 @@ def run_benchmark(
                 result = run_task_via_api(task, mode, client)
                 report.task_results.append(result)
                 symbol = "✓" if result.success else "✗"
-                print(f"    {symbol} {result.step_count} steps, {result.total_time_s:.1f}s")
-                time.sleep(1.0)   # brief pause between tasks
+                answer = f" → {result.final_answer[:40]}" if result.final_answer else ""
+                print(f"    {symbol} {result.step_count} steps, {result.total_time_s:.1f}s{answer}")
+                time.sleep(1.0)
 
-    # Save outputs
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     json_path = Path(output_dir) / f"benchmark_{ts}.json"
     md_path   = Path(output_dir) / f"benchmark_{ts}.md"

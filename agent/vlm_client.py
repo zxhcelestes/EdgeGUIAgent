@@ -1,5 +1,5 @@
 """
-VLM Client — wraps Ollama (qwen2.5vl:3b) and Gemini Flash as hybrid fallback.
+VLM Client — wraps Ollama (qwen2.5vl:3b/7b) and Gemini Flash as hybrid fallback.
 Supports pure-screenshot mode and screenshot+DOM hybrid mode.
 """
 
@@ -51,7 +51,6 @@ class AgentAction:
 # ── Prompt templates ──────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are a GUI automation agent. You observe screenshots of a web browser and output the next action to complete the given task.
-
 Always respond with a JSON object in this exact format:
 {
   "thought": "<brief reasoning about current state and next step>",
@@ -66,7 +65,6 @@ Always respond with a JSON object in this exact format:
     "key": "<string>"
   }
 }
-
 Rules:
 - Coordinates are NORMALIZED (0.0 = left/top, 1.0 = right/bottom).
 - x and y must be single numbers, never lists or arrays.
@@ -80,6 +78,10 @@ Rules:
 - Do NOT keep pressing Enter or clicking if the page has already changed.
 - Respond with JSON only. No markdown fences, no extra text.
 - Your entire response must be a single valid JSON object starting with { and ending with }.
+- When outputting "done" for extraction tasks, put the extracted information in the "text" field.
+  Example: {"type": "done", "text": "The download count is 1.2M"}
+- To fill a search box or input field: use "type" directly with the coordinates of the input.
+  Do NOT first click then type — a single type action handles both focusing and typing.
 """
 
 DOM_CONTEXT_TEMPLATE = """
@@ -100,29 +102,19 @@ def _encode_image(image_bytes: bytes) -> str:
 # ── Response parser ───────────────────────────────────────────────────────────
 
 def _parse_action_response(raw: str, screen_w: int, screen_h: int) -> AgentAction:
-    """
-    Parse model output into AgentAction.
-    Handles:
-      - Clean JSON
-      - JSON wrapped in markdown fences
-      - Natural language fallback: "Action: click: x=1249, y=80"
-      - Empty response
-    """
     print(f"[vlm] raw output: {raw[:300]}")
 
-    # ── Empty response guard ──
     if not raw or not raw.strip():
         print("[vlm] empty response from model")
         return AgentAction(type=ActionType.FAIL, thought="empty response from model", raw=raw)
 
     cleaned = re.sub(r"```(?:json)?|```", "", raw).strip()
 
-    # ── Primary: JSON parse ──
+    # Primary: JSON parse
     match = re.search(r"\{[\s\S]*\}", cleaned)
     if match:
         try:
             data = json.loads(match.group(0))
-
             action_data     = data.get("action", {})
             thought         = data.get("thought", "")
             action_type_str = action_data.get("type", "fail").lower()
@@ -134,30 +126,19 @@ def _parse_action_response(raw: str, screen_w: int, screen_h: int) -> AgentActio
 
             x = action_data.get("x")
             y = action_data.get("y")
-
-            # Model sometimes outputs [x, y] list — take first element
-            if isinstance(x, list):
-                x = x[0] if x else None
-            if isinstance(y, list):
-                y = y[0] if y else None
-
-            # Ensure numeric
+            if isinstance(x, list): x = x[0] if x else None
+            if isinstance(y, list): y = y[0] if y else None
             try:
                 x = float(x) if x is not None else None
                 y = float(y) if y is not None else None
             except (TypeError, ValueError):
                 x, y = None, None
-
-            # Normalize pixel coords to 0-1
-            if x is not None and x > 1.5:
-                x = x / screen_w
-            if y is not None and y > 1.5:
-                y = y / screen_h
+            if x is not None and x > 1.5: x = x / screen_w
+            if y is not None and y > 1.5: y = y / screen_h
 
             return AgentAction(
                 type=action_type,
-                x=x,
-                y=y,
+                x=x, y=y,
                 text=action_data.get("text"),
                 direction=action_data.get("direction"),
                 amount=action_data.get("amount"),
@@ -169,7 +150,7 @@ def _parse_action_response(raw: str, screen_w: int, screen_h: int) -> AgentActio
         except json.JSONDecodeError as e:
             print(f"[vlm] json error: {e}")
 
-    # ── Fallback: natural language format ──
+    # Fallback: natural language format
     action_match  = re.search(
         r"Action:\s*(\w+).*?x[=:]\s*([\d.]+).*?y[=:]\s*([\d.]+)",
         cleaned, re.IGNORECASE
@@ -181,10 +162,8 @@ def _parse_action_response(raw: str, screen_w: int, screen_h: int) -> AgentActio
         action_type_str = action_match.group(1).lower()
         x = float(action_match.group(2))
         y = float(action_match.group(3))
-        if x > 1.5:
-            x = x / screen_w
-        if y > 1.5:
-            y = y / screen_h
+        if x > 1.5: x = x / screen_w
+        if y > 1.5: y = y / screen_h
         thought = thought_match.group(1).strip() if thought_match else ""
         text    = text_match.group(1).strip() if text_match else None
         try:
@@ -198,14 +177,52 @@ def _parse_action_response(raw: str, screen_w: int, screen_h: int) -> AgentActio
     return AgentAction(type=ActionType.FAIL, thought="parse error", raw=raw)
 
 
-# ── Ollama client (qwen2.5vl:3b) ─────────────────────────────────────────────
+# ── Shared evaluator prompt ───────────────────────────────────────────────────
+
+EVAL_SYSTEM_PROMPT = """You are evaluating whether a GUI agent has completed a task.
+Look at the screenshot carefully. Respond with JSON only:
+{"complete": true or false, "reason": "<one sentence explanation>"}
+General rules:
+- Focus on whether the GOAL of the task is achieved, not on the current UI state.
+- Ignore irrelevant UI elements (search bars, navigation menus, ads) when judging completion.
+- A task is complete if the required information is clearly visible anywhere on screen,
+  even if a search box is also visible or partially filled.
+Task-type specific rules:
+- Navigation task ("go to X", "navigate to X"):
+  true if the target page is fully loaded and visible.
+- Search task ("search for X"):
+  true if search results are displayed on screen.
+- Extraction task ("report X", "find X", "what is X"):
+  true if the specific information (a number, a sentence, a name, a date, code content,
+  or any other requested data) is clearly readable on screen — regardless of what else
+  is visible. The agent does NOT need to have spoken the answer aloud; it only needs
+  to be visible on the page.
+- Multi-step task:
+  true only if ALL steps are complete, not just the most recent one.
+Do not output anything except the JSON object."""
+
+
+def _parse_eval_response(raw: str) -> tuple[bool, str]:
+    """Parse evaluator response into (complete, reason)."""
+    if not raw or not raw.strip():
+        return False, "empty response"
+    cleaned = re.sub(r"```(?:json)?|```", "", raw).strip()
+    match = re.search(r"\{[\s\S]*?\}", cleaned)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            return bool(data.get("complete", False)), data.get("reason", "")
+        except json.JSONDecodeError:
+            pass
+    if re.search(r'"complete"\s*:\s*true', raw, re.IGNORECASE):
+        return True, "fallback parse"
+    return False, "parse error"
+
+
+# ── Ollama client (qwen2.5vl:3b/7b) ──────────────────────────────────────────
 
 class OllamaVLMClient:
-    """
-    Calls a local Ollama instance with Ollama-native image format.
-    Uses proxy=None to bypass system proxy for localhost requests.
-    Retries once on 500 errors (memory pressure crashes).
-    """
+    """Calls a local Ollama instance. Uses Ollama native image format."""
 
     def __init__(
         self,
@@ -246,7 +263,6 @@ class OllamaVLMClient:
         prompt_parts.append("What is the next action?")
 
         b64 = _encode_image(screenshot_bytes)
-
         payload = {
             "model": self.model,
             "messages": [
@@ -287,11 +303,7 @@ class OllamaVLMClient:
         screen_w: int,
         screen_h: int,
     ) -> tuple[bool, str]:
-        """
-        Dedicated evaluator call with its own system prompt.
-        Returns (is_complete, reason).
-        Called only when the planner outputs 'done' — verifies before accepting.
-        """
+        """Dedicated evaluator call with its own system prompt."""
         prompt = (
             f"Task: {task}\n"
             f"Current URL: {current_url}\n\n"
@@ -324,9 +336,9 @@ class OllamaVLMClient:
 # ── Gemini client (hybrid / fallback) ────────────────────────────────────────
 
 class GeminiVLMClient:
-    """Uses Gemini 1.5 Flash as remote planner (free tier via AI Studio)."""
+    """Uses Gemini Flash as remote planner (free tier via AI Studio)."""
 
-    def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-2.0-flash-lite"):
         self.model  = model
         self.client = genai.Client(api_key=api_key)
 
@@ -351,7 +363,6 @@ class GeminiVLMClient:
         prompt_parts.append("What is the next action?")
 
         image = Image.open(io.BytesIO(screenshot_bytes))
-
         t0 = time.perf_counter()
         response = self.client.models.generate_content(
             model=self.model,
@@ -362,7 +373,6 @@ class GeminiVLMClient:
             ),
         )
         latency = time.perf_counter() - t0
-
         action = _parse_action_response(response.text, screen_w, screen_h)
         return action, latency
 
@@ -382,7 +392,6 @@ class GeminiVLMClient:
         )
         image = Image.open(io.BytesIO(screenshot_bytes))
         try:
-            t0 = time.perf_counter()
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[prompt, image],
@@ -391,7 +400,6 @@ class GeminiVLMClient:
                     temperature=0.0,
                 ),
             )
-            print(f"[eval] gemini latency: {time.perf_counter()-t0:.1f}s")
             print(f"[eval] raw: {response.text[:150]}")
             return _parse_eval_response(response.text)
         except Exception as e:
@@ -405,27 +413,13 @@ class GeminiVLMClient:
 # ── DOM context builder ───────────────────────────────────────────────────────
 
 def build_dom_context(elements: list[dict], screen_w: int, screen_h: int) -> str:
-    """
-    Convert raw DOM element list into a compact prompt string.
-
-    Priority filtering to avoid token overflow on small models:
-      1. Form elements (input/button/textarea/select) — up to 10
-      2. Short navigation links (text < 30 chars) — up to 5
-      3. Long-text links (search results etc.) — excluded
-
-    Total capped at 15 elements with 40-char text limit.
-    """
-    # Prevent division by zero if screenshot size unavailable
     screen_w = screen_w or 1280
     screen_h = screen_h or 800
 
-    # Priority 1: form elements
     form_els = [
         e for e in elements
         if e.get("tag") in ("input", "button", "textarea", "select")
     ][:10]
-
-    # Priority 2: short nav links (excludes long search-result titles)
     used_texts = {e.get("text", "") for e in form_els}
     nav_links = [
         e for e in elements
@@ -434,10 +428,8 @@ def build_dom_context(elements: list[dict], screen_w: int, screen_h: int) -> str
         and e.get("text") not in used_texts
     ][:5]
 
-    selected = form_els + nav_links
-
     compact = []
-    for el in selected:
+    for el in form_els + nav_links:
         rect = el.get("rect", {})
         cx = (rect.get("left", 0) + rect.get("width",  0) / 2) / screen_w
         cy = (rect.get("top",  0) + rect.get("height", 0) / 2) / screen_h
@@ -448,35 +440,3 @@ def build_dom_context(elements: list[dict], screen_w: int, screen_h: int) -> str
         })
 
     return DOM_CONTEXT_TEMPLATE.format(dom_json=json.dumps(compact, indent=2))
-
-
-# ── Shared evaluator prompt ───────────────────────────────────────────────────
-
-EVAL_SYSTEM_PROMPT = """You are evaluating whether a GUI agent has completed a task.
-Look at the screenshot carefully. Respond with JSON only:
-{"complete": true or false, "reason": "<one sentence explanation>"}
-
-Be strict:
-- For search tasks: only true if search results are clearly visible on screen.
-- For navigation tasks: only true if the target page is fully loaded.
-- For extraction tasks: only true if the required information is visible on screen.
-- Return false if the page is still loading, showing an error, or showing the wrong content.
-Do not output anything except the JSON object."""
-
-
-def _parse_eval_response(raw: str) -> tuple[bool, str]:
-    """Parse evaluator response into (complete, reason)."""
-    if not raw or not raw.strip():
-        return False, "empty response"
-    cleaned = re.sub(r"```(?:json)?|```", "", raw).strip()
-    match = re.search(r"\{[\s\S]*?\}", cleaned)
-    if match:
-        try:
-            data = json.loads(match.group(0))
-            return bool(data.get("complete", False)), data.get("reason", "")
-        except json.JSONDecodeError:
-            pass
-    # Fallback: look for complete=true anywhere in raw
-    if re.search(r'"complete"\s*:\s*true', raw, re.IGNORECASE):
-        return True, "fallback parse"
-    return False, "parse error"

@@ -101,6 +101,10 @@ Rules:
 - Use "fail" only if truly stuck after multiple retries.
 - Respond with JSON only, no markdown, no extra text.
 - Your entire response must be a single valid JSON object.
+- When outputting "done" for extraction tasks, put the extracted information in the "text" field.
+  Example: {"type": "done", "text": "The download count is 1.2M"}
+- To fill a search box or input field: use "type" directly with the coordinates of the input.
+  Do NOT first click then type — a single type action handles both focusing and typing.
 """
 
 DOM_CONTEXT_TEMPLATE = """

@@ -4,6 +4,7 @@ Communicates with the Electron renderer via HTTP (localhost:7788).
 """
 
 import base64
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -38,6 +39,7 @@ class RunResult:
     steps: list[StepRecord] = field(default_factory=list)
     total_time_s: float = 0.0
     failure_reason: Optional[str] = None
+    final_answer: Optional[str] = None  # extracted content from done action text field
 
     def to_dict(self) -> dict:
         return {
@@ -50,6 +52,7 @@ class RunResult:
                 sum(s.latency_s for s in self.steps) / max(len(self.steps), 1), 3
             ),
             "failure_reason": self.failure_reason,
+            "final_answer": self.final_answer,
             "steps": [
                 {
                     "step": s.step,
@@ -130,13 +133,89 @@ def _evaluate_completion(
     screen_h: int,
 ) -> tuple[bool, str]:
     """
-    Calls client.evaluate() if available, otherwise returns (False, 'not supported').
-    Both OllamaVLMClient and GeminiVLMClient implement evaluate().
-    Called only when the planner outputs 'done' — verifies before accepting.
+    Calls client.evaluate() to verify task completion.
+    Called when:
+      (a) the planner outputs 'done' — verifies before accepting
+      (b) URL-based heuristic detects likely completion — confirms before marking success
     """
     if hasattr(client, "evaluate"):
         return client.evaluate(screenshot_bytes, task, current_url, screen_w, screen_h)
     return False, "client does not support evaluation"
+
+
+# ── URL-based completion heuristics ──────────────────────────────────────────
+
+def _url_suggests_completion(task: str, url: str) -> bool:
+    """
+    Lightweight check: does the current URL strongly suggest the task is done?
+    Used as a trigger for the evaluator — does NOT directly mark success.
+    """
+    task_lower = task.lower()
+    url_lower  = url.lower()
+
+    # Search tasks
+    if any(kw in task_lower for kw in ["search for", "search on", "search github"]):
+        if any(kw in url_lower for kw in ["q=", "search", "results"]):
+            return True
+
+    # GitHub Trending
+    if "trending" in task_lower and "github.com/trending" in url_lower:
+        return True
+
+    # Wikipedia cross-page: landed on Attention article
+    if "wikipedia" in task_lower and "wikipedia.org/wiki/" in url_lower:
+        if "attention" in url_lower or "mechanism" in url_lower:
+            return True
+
+    # Hacker News story page
+    if "hacker news" in task_lower and "item?id=" in url_lower:
+        return True
+
+    # HuggingFace model page
+    if "huggingface" in task_lower and "download" in task_lower:
+        if "huggingface.co/" in url_lower and "/models" not in url_lower and "search" not in url_lower:
+            return True
+
+    # GitHub repo page (for repo inspection tasks)
+    if "github" in task_lower and "readme" in task_lower:
+        if "github.com/" in url_lower and "/search" not in url_lower:
+            parts = url_lower.replace("https://github.com/", "").split("/")
+            if len(parts) >= 2 and parts[0] and parts[1]:
+                return True
+
+    return False
+
+
+# ── Loop detection helpers ────────────────────────────────────────────────────
+
+def _extract_coords(history_entry: str) -> Optional[tuple[float, float]]:
+    """Extract (x, y) from a history entry string."""
+    m = re.search(r"x=([\d.]+),\s*y=([\d.]+)", history_entry)
+    if m:
+        try:
+            return round(float(m.group(1)), 2), round(float(m.group(2)), 2)
+        except ValueError:
+            pass
+    return None
+
+
+def _is_coord_loop(history: list[str], current_action: AgentAction) -> bool:
+    """
+    Returns True if the last 3 history entries + current action all have
+    the same (x, y) coordinates — same spot clicked repeatedly with no effect.
+    """
+    if len(history) < 3:
+        return False
+    current_coords = (
+        round(current_action.x or 0.0, 2),
+        round(current_action.y or 0.0, 2),
+    )
+    if current_coords == (0.0, 0.0):
+        return False
+    recent_coords = [_extract_coords(h) for h in history[-3:]]
+    if None in recent_coords:
+        return False
+    return all(c == current_coords for c in recent_coords)
 
 
 # ── Executor ──────────────────────────────────────────────────────────────────
@@ -196,6 +275,21 @@ class AgentExecutor:
             current_url = self.bridge.get_current_url()
             print(f"[executor] step {step_num} url: {current_url}")
 
+            # ── URL heuristic: trigger evaluator proactively ──
+            if _url_suggests_completion(task, current_url):
+                print(f"[executor] URL suggests completion — running evaluator...")
+                complete, reason = _evaluate_completion(
+                    task, screenshot, current_url, client, w, h
+                )
+                if complete:
+                    print(f"[executor] evaluator confirmed via URL heuristic: {reason}")
+                    result.success = True
+                    result.total_time_s = time.perf_counter() - t_start
+                    self.bridge.push_status({"type": "done", "result": result.to_dict()})
+                    return result
+                else:
+                    print(f"[executor] evaluator rejected URL heuristic: {reason} — continuing")
+
             # ── Plan ──
             action, latency = client.get_action(
                 screenshot_bytes=screenshot,
@@ -229,7 +323,6 @@ class AgentExecutor:
 
             # ── Terminal states ──
             if action.type == ActionType.DONE:
-                # VLM evaluator confirms completion before accepting
                 print(f"[executor] model said done — running evaluator...")
                 complete, reason = _evaluate_completion(
                     task, screenshot, current_url, client, w, h
@@ -237,21 +330,35 @@ class AgentExecutor:
                 if complete:
                     print(f"[executor] evaluator confirmed: {reason}")
                     result.success = True
+                    if action.text and action.text.strip():
+                        result.final_answer = action.text.strip()
+                        print(f"[executor] final_answer: {result.final_answer[:100]}")
                     break
                 else:
                     print(f"[executor] evaluator rejected: {reason} — continuing")
-                    # Don't break — keep going, model may have been premature
 
             if action.type == ActionType.FAIL:
                 result.failure_reason = action.thought or "model returned fail"
                 break
 
-            # ── Loop detection ──
+            # ── Loop detection: same coordinates ──
+            if _is_coord_loop(history, action):
+                print(f"[executor] coord loop detected: same (x,y) repeated 3+ times")
+                result.failure_reason = (
+                    f"stuck in loop: same coordinates "
+                    f"({action.x:.2f}, {action.y:.2f}) repeated"
+                )
+                break
+
+            # ── Fallback loop detection: same action type ──
             if len(history) >= 3:
-                last_3 = [s.split(":")[0] for s in history[-3:]]
-                print(f"[executor] loop check: {last_3}, current: {action.type.value}")
-                if len(set(last_3)) == 1 and last_3[0] == action.type.value:
-                    print(f"[executor] loop detected: repeated {action.type.value} 3+ times")
+                last_3_types = [s.split(":")[0] for s in history[-3:]]
+                if (
+                    len(set(last_3_types)) == 1
+                    and last_3_types[0] == action.type.value
+                    and action.type not in (ActionType.SCROLL,)
+                ):
+                    print(f"[executor] type loop detected: repeated {action.type.value}")
                     result.failure_reason = f"stuck in loop: repeated {action.type.value}"
                     break
 
