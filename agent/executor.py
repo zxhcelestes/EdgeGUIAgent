@@ -110,10 +110,13 @@ class ElectronBridge:
             return ""
 
     def execute_action(self, action: AgentAction) -> dict:
+        payload = action.to_dict()
+        print(f"[bridge] execute_action payload: {payload}")
         r = self._client.post(
             f"{self.base_url}/action",
             json=action.to_dict(),
         )
+        print(f"[bridge] execute_action status: {r.status_code}")
         r.raise_for_status()
         return r.json()
 
