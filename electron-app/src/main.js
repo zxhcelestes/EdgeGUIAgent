@@ -268,13 +268,22 @@ async function executeAction(action) {
         wc.sendInputEvent({ type: 'keyUp',   keyCode: 'Backspace' });
         await new Promise(r => setTimeout(r, 50));
 
-        // Set value via React-compatible setter ONLY — no char events
+        // Set value via React-compatible setter
         await wc.executeJavaScript(CLEAR_AND_SET_SCRIPT(action.text)).catch(() => {});
 
-        // Also send char events — required for sites that listen to keydown (Wikipedia)
-        for (const char of action.text) {
-          wc.sendInputEvent({ type: 'char', keyCode: char });
-          await new Promise(r => setTimeout(r, 10));
+        // Check if setter worked — only fallback to char events if it didn't
+        const currentValue = await wc.executeJavaScript(`
+          (function() {
+            const el = document.activeElement;
+            return el ? (el.value || '') : '';
+          })();
+        `).catch(() => '');
+
+        if (!currentValue.includes(action.text)) {
+          for (const char of action.text) {
+            wc.sendInputEvent({ type: 'char', keyCode: char });
+            await new Promise(r => setTimeout(r, 10));
+          }
         }
       }
       break;
