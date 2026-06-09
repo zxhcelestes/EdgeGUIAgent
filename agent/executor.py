@@ -108,6 +108,17 @@ class ElectronBridge:
             return r.json().get("url", "")
         except Exception:
             return ""
+        
+    def wait_for_navigation(self, timeout: float = 3.0) -> str:
+        prev_url = self.get_current_url()
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline:
+            time.sleep(0.3)
+            url = self.get_current_url()
+            if url != prev_url and url not in ("", "about:blank"):
+                return url
+            prev_url = url
+        return prev_url
 
     def execute_action(self, action: AgentAction) -> dict:
         payload = action.to_dict()
@@ -345,6 +356,8 @@ class AgentExecutor:
 
             if action.type == ActionType.NAVIGATE:
                 time.sleep(2.0)
+            elif action.type == ActionType.CLICK:
+                time.sleep(1.0)
             time.sleep(self.step_delay_s)
 
             print(f"[executor] step {step_num} done, loop continues")

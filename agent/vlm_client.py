@@ -91,6 +91,7 @@ DOM_CONTEXT_TEMPLATE = """
 --- END DOM CONTEXT ---
 
 Use the center x/y values directly as your action coordinates.
+For input elements: use "type" action directly with the center coordinates — do NOT click first.
 """
 
 
@@ -436,6 +437,7 @@ def build_dom_context(elements: list[dict], screen_w: int, screen_h: int) -> str
         cy = (rect.get("top",  0) + rect.get("height", 0) / 2) / screen_h
         compact.append({
             "tag":    el.get("tag"),
+            "type":   el.get("type", ""),
             "text":   (el.get("text") or "")[:40],
             "center": {"x": round(cx, 3), "y": round(cy, 3)},
         })
