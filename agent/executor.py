@@ -167,7 +167,6 @@ def _extract_coords(history_entry: str) -> Optional[tuple[float, float]]:
             pass
     return None
 
-
 def _is_coord_loop(history: list[str], current_action: AgentAction) -> bool:
     """
     Returns True if the last 3 history entries + current action all have
@@ -181,7 +180,11 @@ def _is_coord_loop(history: list[str], current_action: AgentAction) -> bool:
     )
     if current_coords == (0.0, 0.0):
         return False
-    recent_coords = [_extract_coords(h) for h in history[-3:]]
+    # 只比较相同动作类型的 history 条目
+    same_type_history = [h for h in history[-3:] if h.startswith(current_action.type.value + ":")]
+    if len(same_type_history) < 3:
+        return False
+    recent_coords = [_extract_coords(h) for h in same_type_history]
     if None in recent_coords:
         return False
     return all(c == current_coords for c in recent_coords)

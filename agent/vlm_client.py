@@ -42,7 +42,8 @@ class AgentAction:
     raw: Optional[str] = None
 
     def to_dict(self) -> dict:
-        d = {k: v for k, v in self.__dict__.items() if v is not None}
+        excluded = {'thought', 'raw'}
+        d = {k: v for k, v in self.__dict__.items() if v is not None and k not in excluded}
         if "type" in d:
             d["type"] = d["type"].value if hasattr(d["type"], "value") else str(d["type"])
         return d

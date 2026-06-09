@@ -222,7 +222,6 @@ async function executeAction(action) {
         const px = action.x != null ? Math.round(action.x * W) : null;
         const py = action.y != null ? Math.round(action.y * H) : null;
 
-        // Step 1: focus via JS + native click
         if (px != null && py != null) {
           await wc.executeJavaScript(`
             (function() {
@@ -236,7 +235,7 @@ async function executeAction(action) {
           await new Promise(r => setTimeout(r, 150));
         }
 
-        // Step 2: select all and clear BEFORE writing
+        // Clear existing content
         wc.sendInputEvent({ type: 'keyDown', keyCode: 'a', modifiers: ['meta'] });
         wc.sendInputEvent({ type: 'keyUp',   keyCode: 'a', modifiers: ['meta'] });
         await new Promise(r => setTimeout(r, 50));
@@ -244,13 +243,8 @@ async function executeAction(action) {
         wc.sendInputEvent({ type: 'keyUp',   keyCode: 'Backspace' });
         await new Promise(r => setTimeout(r, 50));
 
-        // Step 3: set value via React-compatible setter
+        // Set value via React-compatible setter ONLY — no char events
         await wc.executeJavaScript(CLEAR_AND_SET_SCRIPT(action.text)).catch(() => {});
-
-        // Step 4: char events as fallback (only if JS setter didn't work)
-        for (const char of action.text) {
-          wc.sendInputEvent({ type: 'char', keyCode: char });
-        }
       }
       break;
     }
