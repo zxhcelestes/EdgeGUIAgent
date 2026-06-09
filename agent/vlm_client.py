@@ -83,6 +83,9 @@ Rules:
   Example: {"type": "done", "text": "The download count is 1.2M"}
 - To fill a search box or input field: use "type" directly with the coordinates of the input.
   Do NOT first click then type — a single type action handles both focusing and typing.
+- For tasks that require navigating to a specific page, "done" is only valid when 
+  the URL has changed to that page. Reading content from search result snippets 
+  does not count as completing the task.
 """
 
 DOM_CONTEXT_TEMPLATE = """
