@@ -149,6 +149,58 @@ const INPUT_SCRIPT = (text) => `
 })();
 `;
 
+// React-compatible value setter — clears then sets value, dispatches input+change
+const CLEAR_AND_SET_SCRIPT = (text) => `
+(function() {
+  const el = document.activeElement;
+  if (!el) return false;
+  const nativeSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, 'value'
+  ) || Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype, 'value'
+  );
+  if (nativeSetter && nativeSetter.set) {
+    nativeSetter.set.call(el, '');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    nativeSetter.set.call(el, ${JSON.stringify(text)});
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  } else {
+    el.value = ${JSON.stringify(text)};
+  }
+  return true;
+})();
+`;
+
+// JS-level click — works for React/SPA links that don't respond to sendInputEvent
+const JS_CLICK_SCRIPT = (px, py) => `
+(function() {
+  const el = document.elementFromPoint(${px}, ${py});
+  if (!el) return false;
+  let target = el;
+  for (let i = 0; i < 5; i++) {
+    if (!target) break;
+    const tag = target.tagName && target.tagName.toLowerCase();
+    if (tag === 'a' || tag === 'button' || target.onclick ||
+        target.getAttribute('role') === 'button' ||
+        target.getAttribute('role') === 'link') {
+      break;
+    }
+    target = target.parentElement;
+  }
+  if (!target) target = el;
+  target.focus();
+  target.click();
+  ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
+    target.dispatchEvent(new MouseEvent(evt, {
+      bubbles: true, cancelable: true, view: window,
+      clientX: ${px}, clientY: ${py}
+    }));
+  });
+  return target.tagName || true;
+})();
+`;
+
 async function executeAction(action) {
   if (!sandboxView) throw new Error('No sandbox view');
   const wc     = sandboxView.webContents;
