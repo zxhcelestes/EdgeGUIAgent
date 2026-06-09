@@ -340,15 +340,6 @@ class AgentExecutor:
                 result.failure_reason = f"action execution error: {e}"
                 break
 
-            # Auto Enter after type
-            if action.type == ActionType.TYPE and action.text:
-                enter_action = AgentAction(type=ActionType.KEY, key="Enter")
-                try:
-                    self.bridge.execute_action(enter_action)
-                    print(f"[executor] auto Enter after type")
-                except Exception as e:
-                    print(f"[executor] auto Enter error: {e}")
-
             print(f"[executor] appending to history: {action.type.value}")
             history.append(
                 f"{action.type.value}: x={action.x}, y={action.y}, text={action.text}"
