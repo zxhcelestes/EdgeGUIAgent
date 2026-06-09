@@ -212,9 +212,34 @@ async function executeAction(action) {
     case 'click': {
       const px = Math.round((action.x ?? 0.5) * W);
       const py = Math.round((action.y ?? 0.5) * H);
-      wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
-      wc.sendInputEvent({ type: 'mouseDown', button: 'left', x: px, y: py, clickCount: 1 });
-      wc.sendInputEvent({ type: 'mouseUp',   button: 'left', x: px, y: py, clickCount: 1 });
+
+      const href = await wc.executeJavaScript(`
+        (function() {
+          const el = document.elementFromPoint(${px}, ${py});
+          if (!el) return null;
+          let target = el;
+          for (let i = 0; i < 5; i++) {
+            if (!target) break;
+            if (target.tagName && target.tagName.toLowerCase() === 'a' && target.href) {
+              return target.href;
+            }
+            target = target.parentElement;
+          }
+          return null;
+        })();
+      `).catch(() => null);
+
+      if (href && href.startsWith('http')) {
+        console.log(`[action] navigating via loadURL: ${href}`);
+        await wc.loadURL(href);
+      } else {
+        const jsResult = await wc.executeJavaScript(JS_CLICK_SCRIPT(px, py)).catch(() => null);
+        console.log(`[action] click (${px},${py}) js=${jsResult}`);
+        await new Promise(r => setTimeout(r, 100));
+        wc.sendInputEvent({ type: 'mouseMove', x: px, y: py });
+        wc.sendInputEvent({ type: 'mouseDown', button: 'left', x: px, y: py, clickCount: 1 });
+        wc.sendInputEvent({ type: 'mouseUp',   button: 'left', x: px, y: py, clickCount: 1 });
+      }
       break;
     }
     case 'type': {
@@ -245,6 +270,12 @@ async function executeAction(action) {
 
         // Set value via React-compatible setter ONLY — no char events
         await wc.executeJavaScript(CLEAR_AND_SET_SCRIPT(action.text)).catch(() => {});
+
+        // Also send char events — required for sites that listen to keydown (Wikipedia)
+        for (const char of action.text) {
+          wc.sendInputEvent({ type: 'char', keyCode: char });
+          await new Promise(r => setTimeout(r, 10));
+        }
       }
       break;
     }
