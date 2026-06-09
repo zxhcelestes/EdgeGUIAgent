@@ -1,17 +1,5 @@
 /**
  * Electron Main Process
- *
- * Creates:
- *   - A control window (renderer/index.html) showing the agent panel
- *   - A BrowserView (sandboxed) where the agent operates
- *
- * Exposes an Express HTTP server on localhost:7788 for the Python agent:
- *   GET  /screenshot   → PNG base64 of the BrowserView
- *   GET  /dom          → list of interactable DOM elements
- *   GET  /current-url  → current URL of the BrowserView
- *   POST /action       → execute click/type/scroll/key/navigate
- *   POST /navigate     → load a URL in the BrowserView
- *   POST /status       → push step update to renderer via IPC
  */
 
 const { app, BrowserWindow, BrowserView, ipcMain, screen } = require('electron');
@@ -19,20 +7,13 @@ const path    = require('path');
 const http    = require('http');
 const express = require('express');
 
-// ── Config ────────────────────────────────────────────────────────────────────
-
 const BRIDGE_PORT    = 7788;
 const SANDBOX_WIDTH  = 1280;
 const SANDBOX_HEIGHT = 800;
 const CONTROL_WIDTH  = 520;
 
-// ── State ─────────────────────────────────────────────────────────────────────
-
 let mainWindow  = null;
 let sandboxView = null;
-
-
-// ── Window setup ──────────────────────────────────────────────────────────────
 
 function createWindows() {
   const { height: sh } = screen.getPrimaryDisplay().workAreaSize;
@@ -40,8 +21,7 @@ function createWindows() {
   mainWindow = new BrowserWindow({
     width:  CONTROL_WIDTH + SANDBOX_WIDTH,
     height: sh,
-    x: 0,
-    y: 0,
+    x: 0, y: 0,
     title: 'GUI Agent',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -60,20 +40,11 @@ function createWindows() {
     },
   });
   mainWindow.setBrowserView(sandboxView);
-  sandboxView.setBounds({
-    x: CONTROL_WIDTH,
-    y: 0,
-    width:  SANDBOX_WIDTH,
-    height: SANDBOX_HEIGHT,
-  });
+  sandboxView.setBounds({ x: CONTROL_WIDTH, y: 0, width: SANDBOX_WIDTH, height: SANDBOX_HEIGHT });
   sandboxView.setAutoResize({ width: false, height: false });
   sandboxView.webContents.loadURL('about:blank');
-
   mainWindow.on('closed', () => { mainWindow = null; });
 }
-
-
-// ── IPC handlers (renderer → main) ───────────────────────────────────────────
 
 ipcMain.handle('navigate', async (_e, url) => {
   if (!sandboxView) return { ok: false };
@@ -81,25 +52,13 @@ ipcMain.handle('navigate', async (_e, url) => {
   return { ok: true };
 });
 
-ipcMain.handle('get-url', () => {
-  return sandboxView?.webContents.getURL() || '';
-});
-
-
-// ── Screenshot helper ─────────────────────────────────────────────────────────
+ipcMain.handle('get-url', () => sandboxView?.webContents.getURL() || '');
 
 async function captureScreenshot() {
   if (!sandboxView) throw new Error('No sandbox view');
   const image = await sandboxView.webContents.capturePage();
-  return {
-    buffer: image.toPNG(),
-    width:  image.getSize().width,
-    height: image.getSize().height,
-  };
+  return { buffer: image.toPNG(), width: image.getSize().width, height: image.getSize().height };
 }
-
-
-// ── DOM extraction helper ─────────────────────────────────────────────────────
 
 const DOM_SCRIPT = `
 (function() {
@@ -122,43 +81,18 @@ const DOM_SCRIPT = `
 
 async function getDOMElements() {
   if (!sandboxView) return [];
-  try {
-    return await sandboxView.webContents.executeJavaScript(DOM_SCRIPT);
-  } catch (e) {
-    console.error('DOM extraction error:', e.message);
-    return [];
-  }
+  try { return await sandboxView.webContents.executeJavaScript(DOM_SCRIPT); }
+  catch (e) { console.error('DOM extraction error:', e.message); return []; }
 }
 
+// ── Scripts ───────────────────────────────────────────────────────────────────
 
-// ── Action execution ──────────────────────────────────────────────────────────
-
-const INPUT_SCRIPT = (text) => `
-(function() {
-  const el = document.activeElement;
-  if (!el) return false;
-  const nativeInput = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
-  if (nativeInput) {
-    nativeInput.set.call(el, ${JSON.stringify(text)});
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-  } else {
-    el.value = ${JSON.stringify(text)};
-  }
-  return true;
-})();
-`;
-
-// React-compatible value setter — clears then sets value, dispatches input+change
 const CLEAR_AND_SET_SCRIPT = (text) => `
 (function() {
   const el = document.activeElement;
   if (!el) return false;
-  const nativeSetter = Object.getOwnPropertyDescriptor(
-    window.HTMLInputElement.prototype, 'value'
-  ) || Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype, 'value'
-  );
+  const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')
+    || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
   if (nativeSetter && nativeSetter.set) {
     nativeSetter.set.call(el, '');
     el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -168,11 +102,10 @@ const CLEAR_AND_SET_SCRIPT = (text) => `
   } else {
     el.value = ${JSON.stringify(text)};
   }
-  return true;
+  return el.value || '';
 })();
 `;
 
-// JS-level click — works for React/SPA links that don't respond to sendInputEvent
 const JS_CLICK_SCRIPT = (px, py) => `
 (function() {
   const el = document.elementFromPoint(${px}, ${py});
@@ -183,9 +116,7 @@ const JS_CLICK_SCRIPT = (px, py) => `
     const tag = target.tagName && target.tagName.toLowerCase();
     if (tag === 'a' || tag === 'button' || target.onclick ||
         target.getAttribute('role') === 'button' ||
-        target.getAttribute('role') === 'link') {
-      break;
-    }
+        target.getAttribute('role') === 'link') break;
     target = target.parentElement;
   }
   if (!target) target = el;
@@ -193,46 +124,49 @@ const JS_CLICK_SCRIPT = (px, py) => `
   target.click();
   ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
     target.dispatchEvent(new MouseEvent(evt, {
-      bubbles: true, cancelable: true, view: window,
-      clientX: ${px}, clientY: ${py}
+      bubbles: true, cancelable: true, view: window, clientX: ${px}, clientY: ${py}
     }));
   });
   return target.tagName || true;
 })();
 `;
 
+const GET_HREF_SCRIPT = (px, py) => `
+(function() {
+  const el = document.elementFromPoint(${px}, ${py});
+  if (!el) return null;
+  let target = el;
+  for (let i = 0; i < 5; i++) {
+    if (!target) break;
+    if (target.tagName && target.tagName.toLowerCase() === 'a' && target.href) return target.href;
+    target = target.parentElement;
+  }
+  return null;
+})();
+`;
+
+// ── Action execution ──────────────────────────────────────────────────────────
+
 async function executeAction(action) {
   if (!sandboxView) throw new Error('No sandbox view');
-  const wc     = sandboxView.webContents;
+  const wc = sandboxView.webContents;
   const bounds = sandboxView.getBounds();
   const W = bounds.width;
   const H = bounds.height;
 
   switch (action.type) {
+
     case 'click': {
       const px = Math.round((action.x ?? 0.5) * W);
       const py = Math.round((action.y ?? 0.5) * H);
 
-      const href = await wc.executeJavaScript(`
-        (function() {
-          const el = document.elementFromPoint(${px}, ${py});
-          if (!el) return null;
-          let target = el;
-          for (let i = 0; i < 5; i++) {
-            if (!target) break;
-            if (target.tagName && target.tagName.toLowerCase() === 'a' && target.href) {
-              return target.href;
-            }
-            target = target.parentElement;
-          }
-          return null;
-        })();
-      `).catch(() => null);
-
+      // Try to get href — if it's a link, use loadURL directly (bypasses sandbox restrictions)
+      const href = await wc.executeJavaScript(GET_HREF_SCRIPT(px, py)).catch(() => null);
       if (href && href.startsWith('http')) {
-        console.log(`[action] navigating via loadURL: ${href}`);
+        console.log(`[action] click → loadURL: ${href}`);
         await wc.loadURL(href);
       } else {
+        // Non-link element: JS click + native mouse events
         const jsResult = await wc.executeJavaScript(JS_CLICK_SCRIPT(px, py)).catch(() => null);
         console.log(`[action] click (${px},${py}) js=${jsResult}`);
         await new Promise(r => setTimeout(r, 100));
@@ -242,11 +176,13 @@ async function executeAction(action) {
       }
       break;
     }
+
     case 'type': {
       if (action.text) {
         const px = action.x != null ? Math.round(action.x * W) : null;
         const py = action.y != null ? Math.round(action.y * H) : null;
 
+        // Step 1: focus via JS + native click
         if (px != null && py != null) {
           await wc.executeJavaScript(`
             (function() {
@@ -260,7 +196,7 @@ async function executeAction(action) {
           await new Promise(r => setTimeout(r, 150));
         }
 
-        // Clear existing content
+        // Step 2: select all and clear
         wc.sendInputEvent({ type: 'keyDown', keyCode: 'a', modifiers: ['meta'] });
         wc.sendInputEvent({ type: 'keyUp',   keyCode: 'a', modifiers: ['meta'] });
         await new Promise(r => setTimeout(r, 50));
@@ -268,18 +204,11 @@ async function executeAction(action) {
         wc.sendInputEvent({ type: 'keyUp',   keyCode: 'Backspace' });
         await new Promise(r => setTimeout(r, 50));
 
-        // Set value via React-compatible setter
-        await wc.executeJavaScript(CLEAR_AND_SET_SCRIPT(action.text)).catch(() => {});
+        // Step 3: React-compatible setter
+        const setValue = await wc.executeJavaScript(CLEAR_AND_SET_SCRIPT(action.text)).catch(() => '');
 
-        // Check if setter worked — only fallback to char events if it didn't
-        const currentValue = await wc.executeJavaScript(`
-          (function() {
-            const el = document.activeElement;
-            return el ? (el.value || '') : '';
-          })();
-        `).catch(() => '');
-
-        if (!currentValue.includes(action.text)) {
+        // Step 4: fallback to char events if setter didn't work (e.g. Wikipedia)
+        if (!String(setValue).includes(action.text)) {
           for (const char of action.text) {
             wc.sendInputEvent({ type: 'char', keyCode: char });
             await new Promise(r => setTimeout(r, 10));
@@ -288,6 +217,7 @@ async function executeAction(action) {
       }
       break;
     }
+
     case 'scroll': {
       const px = Math.round((action.x ?? 0.5) * W);
       const py = Math.round((action.y ?? 0.5) * H);
@@ -295,26 +225,26 @@ async function executeAction(action) {
       wc.sendInputEvent({ type: 'mouseWheel', x: px, y: py, deltaX: 0, deltaY: delta });
       break;
     }
+
     case 'navigate': {
       if (action.url) await wc.loadURL(action.url);
       break;
     }
+
     case 'key': {
       if (action.key) {
-        const KEY_MAP = {
-          'Enter': 'Return', 'Tab': 'Tab', 'Escape': 'Escape',
-        };
         const key = action.key;
         if (key.toLowerCase() === 'enter') {
           wc.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
           wc.sendInputEvent({ type: 'keyUp',   keyCode: 'Return' });
         } else if (key.includes('+')) {
-          const parts    = key.split('+');
+          const parts     = key.split('+');
           const modifiers = parts.slice(0, -1).map(m => m.toLowerCase());
-          const mainKey  = parts[parts.length - 1];
+          const mainKey   = parts[parts.length - 1];
           wc.sendInputEvent({ type: 'keyDown', keyCode: mainKey, modifiers });
           wc.sendInputEvent({ type: 'keyUp',   keyCode: mainKey, modifiers });
         } else {
+          const KEY_MAP = { 'Enter': 'Return', 'Tab': 'Tab', 'Escape': 'Escape' };
           const kc = KEY_MAP[key] || key;
           wc.sendInputEvent({ type: 'keyDown', keyCode: kc });
           wc.sendInputEvent({ type: 'keyUp',   keyCode: kc });
@@ -322,6 +252,7 @@ async function executeAction(action) {
       }
       break;
     }
+
     default:
       break;
   }
@@ -329,7 +260,6 @@ async function executeAction(action) {
   await new Promise(r => setTimeout(r, 300));
   return { ok: true };
 }
-
 
 // ── Express HTTP Bridge ───────────────────────────────────────────────────────
 
@@ -341,28 +271,21 @@ function startBridge() {
     try {
       const { buffer, width, height } = await captureScreenshot();
       res.json({ image: buffer.toString('base64'), width, height });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   expressApp.get('/dom', async (req, res) => {
     try {
       const elements = await getDOMElements();
       res.json({ elements });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── NEW: current URL endpoint ─────────────────────────────────────────────
   expressApp.get('/current-url', (req, res) => {
     try {
       const url = sandboxView?.webContents.getURL() || '';
       res.json({ url });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   expressApp.post('/action', async (req, res) => {
@@ -380,15 +303,11 @@ function startBridge() {
       const { url } = req.body;
       await sandboxView.webContents.loadURL(url);
       res.json({ ok: true });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   expressApp.post('/status', (req, res) => {
-    if (mainWindow) {
-      mainWindow.webContents.send('agent-status', req.body);
-    }
+    if (mainWindow) mainWindow.webContents.send('agent-status', req.body);
     res.json({ ok: true });
   });
 
@@ -399,18 +318,6 @@ function startBridge() {
   return server;
 }
 
-
-// ── App lifecycle ─────────────────────────────────────────────────────────────
-
-app.whenReady().then(() => {
-  createWindows();
-  startBridge();
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
-
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindows();
-});
+app.whenReady().then(() => { createWindows(); startBridge(); });
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindows(); });

@@ -83,9 +83,6 @@ Rules:
   Example: {"type": "done", "text": "The download count is 1.2M"}
 - To fill a search box or input field: use "type" directly with the coordinates of the input.
   Do NOT first click then type — a single type action handles both focusing and typing.
-- For tasks that require navigating to a specific page, "done" is only valid when 
-  the URL has changed to that page. Reading content from search result snippets 
-  does not count as completing the task.
 """
 
 DOM_CONTEXT_TEMPLATE = """
@@ -94,8 +91,7 @@ DOM_CONTEXT_TEMPLATE = """
 --- END DOM CONTEXT ---
 
 Use the center x/y values directly as your action coordinates.
-For elements with "action": "type", use a type action with those coordinates.
-For elements with "action": "click", use a click action.
+For input elements: use "type" action directly with the center coordinates — do NOT click first.
 """
 
 
@@ -439,11 +435,12 @@ def build_dom_context(elements: list[dict], screen_w: int, screen_h: int) -> str
         rect = el.get("rect", {})
         cx = (rect.get("left", 0) + rect.get("width",  0) / 2) / screen_w
         cy = (rect.get("top",  0) + rect.get("height", 0) / 2) / screen_h
+        is_input = el.get("tag") in ("input", "textarea")
         compact.append({
             "tag":    el.get("tag"),
             "text":   (el.get("text") or "")[:40],
             "center": {"x": round(cx, 3), "y": round(cy, 3)},
-            "action": "type" if el.get("tag") in ("input", "textarea") else "click",
+            "action": "type" if is_input else "click",
         })
 
     return DOM_CONTEXT_TEMPLATE.format(dom_json=json.dumps(compact, indent=2))
