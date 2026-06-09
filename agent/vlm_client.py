@@ -91,7 +91,8 @@ DOM_CONTEXT_TEMPLATE = """
 --- END DOM CONTEXT ---
 
 Use the center x/y values directly as your action coordinates.
-For input elements: use "type" action directly with the center coordinates — do NOT click first.
+For elements with "action": "type", use a type action with those coordinates.
+For elements with "action": "click", use a click action.
 """
 
 
@@ -435,12 +436,11 @@ def build_dom_context(elements: list[dict], screen_w: int, screen_h: int) -> str
         rect = el.get("rect", {})
         cx = (rect.get("left", 0) + rect.get("width",  0) / 2) / screen_w
         cy = (rect.get("top",  0) + rect.get("height", 0) / 2) / screen_h
-        is_input = el.get("tag") in ("input", "textarea")
         compact.append({
             "tag":    el.get("tag"),
             "text":   (el.get("text") or "")[:40],
             "center": {"x": round(cx, 3), "y": round(cy, 3)},
-            "action": "type" if is_input else "click",
+            "action": "type" if el.get("tag") in ("input", "textarea") else "click",
         })
 
     return DOM_CONTEXT_TEMPLATE.format(dom_json=json.dumps(compact, indent=2))
