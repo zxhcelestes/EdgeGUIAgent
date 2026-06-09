@@ -190,6 +190,11 @@ const JS_CLICK_SCRIPT = (px, py) => `
   }
   if (!target) target = el;
   target.focus();
+  // For <a> tags with href, use direct navigation to ensure the click works
+  if (target.tagName && target.tagName.toLowerCase() === 'a' && target.href) {
+    window.location.href = target.href;
+    return 'navigated:' + target.href;
+  }
   target.click();
   ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
     target.dispatchEvent(new MouseEvent(evt, {
