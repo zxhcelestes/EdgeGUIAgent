@@ -46,14 +46,14 @@ TASKS: list[Task] = [
         notes="Tests: result selection + page navigation + numeric data extraction. No login required.",
     ),
     Task(
-        id="arxiv_paper_info",
-        name="Arxiv paper search and extraction",
-        description="Go to arxiv.org, search for 'vision language model GUI agent', open the first result, and report the title and the first sentence of the abstract",
-        start_url="https://arxiv.org",
-        success_criteria="Agent reports the paper title and first sentence of abstract",
+        id="wikipedia_cross_page",
+        name="Wikipedia cross-page navigation",
+        description="On Wikipedia, search for 'Transformer(deep learning)', then click on the search result titled 'Transformer (deep learning)', find and click the 'Attention' link within the article, and report the first sentence of that page",
+        start_url="https://en.wikipedia.org/wiki/Main_Page",
+        success_criteria="Agent reports the first sentence of the Attention mechanism Wikipedia page",
         category="multi_step",
         playwright_possible=True,
-        notes="Tests: homepage search → result click → content extraction",
+        notes="Tests: search → article → in-text link navigation → content extraction",
     ),
 ]
 
