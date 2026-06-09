@@ -228,8 +228,12 @@ async function executeAction(action) {
             target = target.parentElement;
           }
           // Search downward in descendants
-          const child = el.querySelector('a[href]');
-          if (child && child.href) return child.href;
+          // Search direct children only
+          for (const child of el.children) {
+            if (child.tagName && child.tagName.toLowerCase() === 'a' && child.href) {
+              return child.href;
+            }
+          }
           return null;
         })();
       `).catch(() => null);
@@ -290,7 +294,7 @@ async function executeAction(action) {
             await new Promise(r => setTimeout(r, 10));
           }
         }
-        
+
         // Submit the form or dispatch Enter keydown
         await wc.executeJavaScript(`
           (function() {
