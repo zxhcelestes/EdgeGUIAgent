@@ -213,18 +213,23 @@ async function executeAction(action) {
       const px = Math.round((action.x ?? 0.5) * W);
       const py = Math.round((action.y ?? 0.5) * H);
 
+      // Try to get href — if it's a link, use loadURL directly (bypasses sandbox)
       const href = await wc.executeJavaScript(`
         (function() {
           const el = document.elementFromPoint(${px}, ${py});
           if (!el) return null;
+          // Search upward in ancestors
           let target = el;
-          for (let i = 0; i < 5; i++) {
+          for (let i = 0; i < 15; i++) {
             if (!target) break;
             if (target.tagName && target.tagName.toLowerCase() === 'a' && target.href) {
               return target.href;
             }
             target = target.parentElement;
           }
+          // Search downward in descendants
+          const child = el.querySelector('a[href]');
+          if (child && child.href) return child.href;
           return null;
         })();
       `).catch(() => null);
