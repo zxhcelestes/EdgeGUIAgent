@@ -83,8 +83,6 @@ Rules:
   Example: {"type": "done", "text": "The download count is 1.2M"}
 - To fill a search box or input field: use "type" directly with the coordinates of the input.
   Do NOT first click then type — a single type action handles both focusing and typing.
-- After typing in a search box, always output a separate "key": "Enter" action or click 
-  the first suggestion to submit the search. Never assume Enter is automatic.
 """
 
 DOM_CONTEXT_TEMPLATE = """
