@@ -290,6 +290,20 @@ async function executeAction(action) {
             await new Promise(r => setTimeout(r, 10));
           }
         }
+        
+        // Submit the form or dispatch Enter keydown
+        await wc.executeJavaScript(`
+          (function() {
+            const el = document.activeElement;
+            if (el && el.form) el.form.submit();
+            else if (el) {
+              el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+              el.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Enter', keyCode: 13, bubbles: true }));
+            }
+          })();
+        `).catch(() => {});
+
+
       }
       break;
     }
