@@ -228,10 +228,13 @@ async function executeAction(action) {
             target = target.parentElement;
           }
           // Search downward in descendants
-          // Search direct children only
-          for (const child of el.children) {
-            if (child.tagName && child.tagName.toLowerCase() === 'a' && child.href) {
-              return child.href;
+          // Search descendants within small radius
+          const allLinks = el.querySelectorAll('a[href]');
+          for (const link of allLinks) {
+            const r = link.getBoundingClientRect();
+            if (Math.abs(r.left + r.width/2 - ${px}) < 30 &&
+                Math.abs(r.top + r.height/2 - ${py}) < 30) {
+              return link.href;
             }
           }
           return null;
