@@ -344,7 +344,7 @@ class AgentExecutor:
             if action.type == ActionType.TYPE and action.text:
                 enter_action = AgentAction(type=ActionType.KEY, key="Enter")
                 try:
-                    time.sleep(0.5)
+                    time.sleep(1.0)
                     self.bridge.execute_action(enter_action)
                     print(f"[executor] auto Enter after type")
                 except Exception as e:
