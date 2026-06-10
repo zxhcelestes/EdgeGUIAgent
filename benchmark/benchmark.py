@@ -36,7 +36,7 @@ class Task:
 
 TASKS: list[Task] = [
     Task(
-        id="huggingface_model_info",
+        id="huggingface",
         name="HuggingFace model page extraction",
         description="Go to HuggingFace and search for 'qwen2.5-vl', open the first result, and report the model's download count shown on the page",
         start_url="https://huggingface.co",
@@ -46,7 +46,7 @@ TASKS: list[Task] = [
         notes="Tests: result selection + page navigation + numeric data extraction. No login required.",
     ),
     Task(
-        id="wikipedia_cross_page",
+        id="wikipedia",
         name="Wikipedia cross-page navigation",
         description="On Wikipedia, search for 'Transformer(deep learning)', click on the search result titled 'Transformer (deep learning)' to open the article, and report the first sentence of that article",
         start_url="https://en.wikipedia.org/wiki/Main_Page",
