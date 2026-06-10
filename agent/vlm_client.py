@@ -76,6 +76,10 @@ Rules:
 - Use "fail" if the task is impossible or you are stuck after multiple retries.
 - Be precise: prefer clicking visible buttons/links over typing URLs.
 - If DOM context is provided, use the center x/y values directly as coordinates.
+- If DOM context shows an element with "action": "type", you MUST use a type action
+  with those coordinates — never click first. Example: if DOM shows
+  {"tag": "input", "action": "type", "center": {"x": 0.27, "y": 0.04}},
+  output {"type": "type", "x": 0.27, "y": 0.04, "text": "your query"} directly.
 - Do NOT keep pressing Enter or clicking if the page has already changed.
 - Respond with JSON only. No markdown fences, no extra text.
 - Your entire response must be a single valid JSON object starting with { and ending with }.
@@ -90,9 +94,10 @@ DOM_CONTEXT_TEMPLATE = """
 {dom_json}
 --- END DOM CONTEXT ---
 
-Use the center x/y values directly as your action coordinates.
-For elements with "action": "type", use a type action with those coordinates.
-For elements with "action": "click", use a click action.
+IMPORTANT RULES FOR DOM CONTEXT:
+- Elements with "action": "type" → use TYPE action with those coordinates directly. DO NOT click first.
+- Elements with "action": "click" → use CLICK action with those coordinates.
+- Use the exact center x/y values as your action coordinates.
 """
 
 
