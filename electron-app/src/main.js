@@ -227,13 +227,15 @@ async function executeAction(action) {
             }
             target = target.parentElement;
           }
-          // Search downward in descendants
           // Search descendants within small radius
           const allLinks = el.querySelectorAll('a[href]');
           for (const link of allLinks) {
             const r = link.getBoundingClientRect();
-            if (Math.abs(r.left + r.width/2 - ${px}) < 30 &&
-                Math.abs(r.top + r.height/2 - ${py}) < 30) {
+            if (Math.abs(r.left + r.width/2 - ${px}) < 50 &&
+                Math.abs(r.top + r.height/2 - ${py}) < 50) {
+              console.log('[href-search] found link at distance', 
+                Math.abs(r.left + r.width/2 - ${px}), 
+                Math.abs(r.top + r.height/2 - ${py}));
               return link.href;
             }
           }
