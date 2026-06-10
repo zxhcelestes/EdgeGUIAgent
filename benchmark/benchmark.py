@@ -48,7 +48,7 @@ TASKS: list[Task] = [
     Task(
         id="wikipedia_cross_page",
         name="Wikipedia cross-page navigation",
-        description="On Wikipedia, search for 'Transformer(deep learning)', click on the blue link titled 'Transformer (deep learning)' in the search results to open the article page, then report the first sentence of the Attention article page that opens",
+        description="On Wikipedia, search for 'Transformer(deep learning)', click on the search result titled 'Transformer (deep learning)' to open the article, and report the first sentence of that article",
         start_url="https://en.wikipedia.org/wiki/Main_Page",
         success_criteria="Agent navigates to the Attention Wikipedia article page and reports its first sentence",
         category="multi_step",
