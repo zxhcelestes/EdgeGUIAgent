@@ -90,10 +90,8 @@ DOM_CONTEXT_TEMPLATE = """
 {dom_json}
 --- END DOM CONTEXT ---
 
-IMPORTANT RULES FOR DOM CONTEXT:
-- Elements with "action": "type" → use TYPE action with those coordinates directly. DO NOT click first.
-- Elements with "action": "click" → use CLICK action with those coordinates.
-- Use the exact center x/y values as your action coordinates.
+Use the center x/y values directly as your action coordinates.
+For input elements: use "type" action directly with the center coordinates — do NOT click first.
 """
 
 
