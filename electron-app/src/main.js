@@ -218,9 +218,15 @@ async function executeAction(action) {
         (function() {
           const el = document.elementFromPoint(${px}, ${py});
           if (!el) return null;
-          // Search upward using closest
-          const ancestor = el.closest('a[href]');
-          if (ancestor) return ancestor.href;
+          // Search upward in ancestors
+          let target = el;
+          for (let i = 0; i < 15; i++) {
+            if (!target) break;
+            if (target.tagName && target.tagName.toLowerCase() === 'a' && target.href) {
+              return target.href;
+            }
+            target = target.parentElement;
+          }
           // Search descendants within small radius
           const allLinks = el.querySelectorAll('a[href]');
           for (const link of allLinks) {
