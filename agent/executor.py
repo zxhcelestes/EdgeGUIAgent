@@ -232,7 +232,7 @@ class AgentExecutor:
 
         if start_url:
             self.bridge.navigate(start_url)
-            time.sleep(3.0)
+            time.sleep(5.0)
 
         client = self._get_vlm_client()
         if client is None:
