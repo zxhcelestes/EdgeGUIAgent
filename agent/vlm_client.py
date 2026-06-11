@@ -443,19 +443,24 @@ class ClaudeVLMClient:
 def build_dom_context(elements: list[dict], screen_w: int, screen_h: int) -> str:
     screen_w = screen_w or 1280
     screen_h = screen_h or 800
-
+ 
     form_els = [
         e for e in elements
         if e.get("tag") in ("input", "button", "textarea", "select")
-    ][:10]
+    ][:15]
     used_texts = {e.get("text", "") for e in form_els}
+    CHROME_LINK_TEXTS = {
+        "pricing", "sign up", "sign in", "log in", "login", "donate",
+        "create account", "menu", "home", "about", "contact",
+    }
     nav_links = [
         e for e in elements
         if e.get("tag") == "a"
-        and 0 < len(e.get("text") or "") < 30
+        and 0 < len(e.get("text") or "") < 40
         and e.get("text") not in used_texts
-    ][:5]
-
+        and (e.get("text") or "").strip().lower() not in CHROME_LINK_TEXTS
+    ][:10]
+ 
     compact = []
     for el in form_els + nav_links:
         rect = el.get("rect", {})
@@ -467,5 +472,5 @@ def build_dom_context(elements: list[dict], screen_w: int, screen_h: int) -> str
             "center": {"x": round(cx, 3), "y": round(cy, 3)},
             "action": "type" if el.get("tag") in ("input", "textarea") else "click",
         })
-
+ 
     return DOM_CONTEXT_TEMPLATE.format(dom_json=json.dumps(compact, indent=2))
