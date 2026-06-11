@@ -191,7 +191,7 @@ def _is_coord_loop(history: list[str], current_action: AgentAction) -> bool:
     )
     if current_coords == (0.0, 0.0):
         return False
-    # 只比较相同动作类型的 history 条目
+    # Compare only history entries of the same action type
     same_type_history = [h for h in history[-3:] if h.startswith(current_action.type.value + ":")]
     if len(same_type_history) < 3:
         return False
@@ -199,6 +199,33 @@ def _is_coord_loop(history: list[str], current_action: AgentAction) -> bool:
     if None in recent_coords:
         return False
     return all(c == current_coords for c in recent_coords)
+
+
+def _find_dom_element_at(
+    dom_elements: list[dict],
+    x: float,
+    y: float,
+    screen_w: int,
+    screen_h: int,
+    tags: tuple[str, ...],
+    threshold: float = 0.05,
+) -> Optional[dict]:
+    """Find the closest DOM element with one of `tags` to normalized (x, y)."""
+    best = None
+    best_dist = threshold
+    for el in dom_elements:
+        if el.get("tag") not in tags:
+            continue
+        rect = el.get("rect") or {}
+        if not rect:
+            continue
+        cx = (rect.get("left", 0) + rect.get("width", 0) / 2) / screen_w
+        cy = (rect.get("top", 0) + rect.get("height", 0) / 2) / screen_h
+        dist = ((cx - x) ** 2 + (cy - y) ** 2) ** 0.5
+        if dist < best_dist:
+            best_dist = dist
+            best = el
+    return best
 
 
 # ── Executor ──────────────────────────────────────────────────────────────────
@@ -332,6 +359,43 @@ class AgentExecutor:
                     result.failure_reason = f"stuck in loop: repeated {action.type.value}"
                     break
 
+            # ── DOM-mode action correction ──
+            if self.mode in ("dom", "hybrid") and dom_elements and action.type == ActionType.CLICK:
+                ax = action.x or 0.0
+                ay = action.y or 0.0
+ 
+                # Correction 1: click landed on an input/textarea -> reject, suggest type
+                input_match = _find_dom_element_at(
+                    dom_elements, ax, ay, w, h, ("input", "textarea")
+                )
+                if input_match:
+                    print(f"[executor] DOM correction: click on input rejected, suggesting type")
+                    history.append(
+                        f"system_note: click at ({ax:.2f},{ay:.2f}) targeted an input field "
+                        f"'{input_match.get('text', '')}' — use a TYPE action with these "
+                        f"coordinates instead, do not click it"
+                    )
+                    time.sleep(self.step_delay_s)
+                    continue
+ 
+                # Correction 2: click landed on a link with href -> navigate directly
+                link_match = _find_dom_element_at(
+                    dom_elements, ax, ay, w, h, ("a",)
+                )
+                if link_match and link_match.get("href"):
+                    href = link_match["href"]
+                    print(f"[executor] DOM correction: click on link -> navigate({href})")
+                    try:
+                        self.bridge.navigate(href)
+                        time.sleep(2.0)
+                    except Exception as e:
+                        result.failure_reason = f"navigate error: {e}"
+                        break
+                    history.append(f"navigate: x=None, y=None, text={href}")
+                    time.sleep(self.step_delay_s)
+                    print(f"[executor] step {step_num} done (DOM-corrected navigate), loop continues")
+                    continue
+
             # ── Act ──
             print(f"[executor] about to act: {action.type.value}")
             try:
@@ -340,7 +404,7 @@ class AgentExecutor:
                 result.failure_reason = f"action execution error: {e}"
                 break
 
-            # 删除这整段
+
             if action.type == ActionType.TYPE and action.text:
                 enter_action = AgentAction(type=ActionType.KEY, key="Enter")
                 try:
