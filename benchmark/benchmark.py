@@ -265,15 +265,15 @@ def run_benchmark(
         try:
             health = client.get(f"{AGENT_SERVER}/health").json()
             print(f"Agent server: ollama={health.get('ollama')}, "
-                  f"model={health.get('model')}, gemini={health.get('gemini')}")
+                  f"model={health.get('model')}, claude={health.get('claude')}")
         except Exception as e:
             print(f"Warning: cannot reach agent server: {e}")
 
         for mode in modes:
             print(f"\n=== Mode: {mode} ===")
             for task in tasks:
-                if mode == "hybrid" and not os.getenv("GEMINI_API_KEY"):
-                    print(f"  [hybrid] skipping {task.id} — no GEMINI_API_KEY")
+                if mode == "hybrid" and not os.getenv("ANTHROPIC_API_KEY"):
+                    print(f"  [hybrid] skipping {task.id} — no ANTHROPIC_API_KEY")
                     report.task_results.append(TaskResult(
                         task_id=task.id, mode=mode, success=False,
                         step_count=0, total_time_s=0.0, avg_latency_s=0.0,

@@ -6,7 +6,7 @@ Endpoints:
   POST /run           { task, start_url, mode, max_steps }
   GET  /status/stream → SSE stream of live step updates
   GET  /results       → list of past RunResult dicts
-  GET  /health        → ollama/gemini status + running flag
+  GET  /health        → ollama/Claude status + running flag
 
 Model selection via environment variables:
   OLLAMA_MODEL=qwen2.5vl:3b   (default, M2 16GB)
@@ -26,7 +26,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from executor import AgentExecutor, ElectronBridge, RunResult
-from vlm_client import OllamaVLMClient, GeminiVLMClient
+from vlm_client import OllamaVLMClient, ClaudeVLMClient
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ from vlm_client import OllamaVLMClient, GeminiVLMClient
 
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5vl:3b")
 OLLAMA_URL   = os.getenv("OLLAMA_URL",   "http://localhost:11434")
-GEMINI_KEY   = os.getenv("GEMINI_API_KEY", "")
+ANTHROPIC_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
 ELECTRON_URL = os.getenv("ELECTRON_URL",  "http://localhost:7788")
 
 # Step delay — 7B is faster per token, can afford shorter delay
@@ -57,7 +57,7 @@ _results: list[dict] = []
 _running = False
 
 local_client:  Optional[OllamaVLMClient]  = None
-remote_client: Optional[GeminiVLMClient]  = None
+remote_client: Optional[ClaudeVLMClient]  = None
 bridge:        Optional[ElectronBridge]   = None
 
 
@@ -70,8 +70,8 @@ async def lifespan(app: FastAPI):
     print(f"[server] max_steps:  {MAX_STEPS}")
 
     local_client = OllamaVLMClient(model=OLLAMA_MODEL, base_url=OLLAMA_URL)
-    if GEMINI_KEY:
-        remote_client = GeminiVLMClient(api_key=GEMINI_KEY)
+    if ANTHROPIC_KEY:
+        remote_client = ClaudeVLMClient(api_key=ANTHROPIC_KEY)
     bridge = ElectronBridge(base_url=ELECTRON_URL)
 
     yield
@@ -114,7 +114,7 @@ async def health():
         "status":     "ok",
         "ollama":     ollama_ok,
         "model":      OLLAMA_MODEL,
-        "gemini":     bool(GEMINI_KEY),
+        "claude":     bool(ANTHROPIC_KEY),
         "running":    _running,
         "step_delay": STEP_DELAY,
     }

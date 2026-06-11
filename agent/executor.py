@@ -15,7 +15,7 @@ from vlm_client import (
     AgentAction,
     ActionType,
     OllamaVLMClient,
-    GeminiVLMClient,
+    ClaudeVLMClient,
     build_dom_context,
 )
 
@@ -208,7 +208,7 @@ class AgentExecutor:
         self,
         bridge: ElectronBridge,
         local_client: Optional[OllamaVLMClient] = None,
-        remote_client: Optional[GeminiVLMClient] = None,
+        remote_client: Optional[ClaudeVLMClient] = None,
         mode: str = "screenshot",
         max_steps: int = 20,
         step_delay_s: float = 0.3,

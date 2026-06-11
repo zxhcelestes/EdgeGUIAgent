@@ -1,5 +1,5 @@
 """
-VLM Client — wraps Ollama (qwen2.5vl:3b/7b) and Gemini Flash as hybrid fallback.
+VLM Client — wraps Ollama (qwen2.5vl:3b/7b) and Anthropic Claude as hybrid fallback.
 Supports pure-screenshot mode and screenshot+DOM hybrid mode.
 """
 
@@ -14,8 +14,7 @@ from typing import Optional
 
 import httpx
 from PIL import Image
-from google import genai
-from google.genai import types
+import anthropic
 
 
 class ActionType(str, Enum):
@@ -335,14 +334,14 @@ class OllamaVLMClient:
         self._client.close()
 
 
-# ── Gemini client (hybrid / fallback) ────────────────────────────────────────
+# ── Anthropic Claude client (hybrid / fallback) ────────────────────────────────────────
 
-class GeminiVLMClient:
-    """Uses Gemini Flash as remote planner (free tier via AI Studio)."""
-
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash-lite"):
+class ClaudeVLMClient:
+    """Uses Claude claude-opus-4-5 as remote planner via Anthropic API."""
+ 
+    def __init__(self, api_key: str, model: str = "claude-opus-4-5"):
         self.model  = model
-        self.client = genai.Client(api_key=api_key)
+        self.client = anthropic.Anthropic(api_key=api_key)
 
     def is_available(self) -> bool:
         return True
@@ -364,18 +363,33 @@ class GeminiVLMClient:
             prompt_parts.append(dom_context)
         prompt_parts.append("What is the next action?")
 
-        image = Image.open(io.BytesIO(screenshot_bytes))
+        image_b64 = base64.b64encode(screenshot_bytes).decode()
         t0 = time.perf_counter()
-        response = self.client.models.generate_content(
+        response = self.client.messages.create(
             model=self.model,
-            contents=["\n\n".join(prompt_parts), image],
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=0.0,
-            ),
+            max_tokens=512,
+            system=SYSTEM_PROMPT,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": image_b64,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": "\n\n".join(prompt_parts),
+                    },
+                ],
+            }],
         )
         latency = time.perf_counter() - t0
-        action = _parse_action_response(response.text, screen_w, screen_h)
+        text = response.content[0].text
+        action = _parse_action_response(text, screen_w, screen_h)
         return action, latency
 
     def evaluate(
@@ -386,26 +400,38 @@ class GeminiVLMClient:
         screen_w: int,
         screen_h: int,
     ) -> tuple[bool, str]:
-        """Dedicated evaluator call for Gemini hybrid mode."""
+        """Dedicated evaluator call for Claude hybrid mode."""
         prompt = (
             f"Task: {task}\n"
             f"Current URL: {current_url}\n\n"
             "Has this task been fully completed based on what you see in the screenshot?"
         )
-        image = Image.open(io.BytesIO(screenshot_bytes))
+        image_b64 = base64.b64encode(screenshot_bytes).decode()
         try:
-            response = self.client.models.generate_content(
+            response = self.client.messages.create(
                 model=self.model,
-                contents=[prompt, image],
-                config=types.GenerateContentConfig(
-                    system_instruction=EVAL_SYSTEM_PROMPT,
-                    temperature=0.0,
-                ),
+                max_tokens=256,
+                system=EVAL_SYSTEM_PROMPT,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": image_b64,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
             )
-            print(f"[eval] raw: {response.text[:150]}")
-            return _parse_eval_response(response.text)
+            text = response.content[0].text
+            print(f"[eval] raw: {text[:150]}")
+            return _parse_eval_response(text)
         except Exception as e:
-            print(f"[eval] gemini error: {e}")
+            print(f"[eval] claude error: {e}")
             return False, f"evaluator error: {e}"
 
     def close(self):
