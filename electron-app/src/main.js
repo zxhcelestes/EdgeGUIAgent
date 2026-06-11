@@ -213,17 +213,31 @@ async function executeAction(action) {
       const px = Math.round((action.x ?? 0.5) * W);
       const py = Math.round((action.y ?? 0.5) * H);
 
+      // Try to get href — if it's a link, use loadURL directly (bypasses sandbox)
       const href = await wc.executeJavaScript(`
         (function() {
           const el = document.elementFromPoint(${px}, ${py});
           if (!el) return null;
+          // Search upward in ancestors
           let target = el;
-          for (let i = 0; i < 5; i++) {
+          for (let i = 0; i < 15; i++) {
             if (!target) break;
             if (target.tagName && target.tagName.toLowerCase() === 'a' && target.href) {
               return target.href;
             }
             target = target.parentElement;
+          }
+          // Search descendants within small radius
+          const allLinks = el.querySelectorAll('a[href]');
+          for (const link of allLinks) {
+            const r = link.getBoundingClientRect();
+            if (Math.abs(r.left + r.width/2 - ${px}) < 50 &&
+                Math.abs(r.top + r.height/2 - ${py}) < 50) {
+              console.log('[href-search] found link at distance', 
+                Math.abs(r.left + r.width/2 - ${px}), 
+                Math.abs(r.top + r.height/2 - ${py}));
+              return link.href;
+            }
           }
           return null;
         })();
@@ -285,6 +299,20 @@ async function executeAction(action) {
             await new Promise(r => setTimeout(r, 10));
           }
         }
+
+        // Submit the form or dispatch Enter keydown
+        await wc.executeJavaScript(`
+          (function() {
+            const el = document.activeElement;
+            if (el && el.form) el.form.submit();
+            else if (el) {
+              el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
+              el.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Enter', keyCode: 13, bubbles: true }));
+            }
+          })();
+        `).catch(() => {});
+
+
       }
       break;
     }

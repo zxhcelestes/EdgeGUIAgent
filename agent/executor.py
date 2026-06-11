@@ -228,31 +228,6 @@ def _find_dom_element_at(
     return best
 
 
-_CHROME_LINK_TEXTS = {
-    "pricing", "sign up", "sign in", "log in", "login", "donate",
-    "create account", "menu", "home", "about", "contact",
-}
- 
- 
-def _find_dom_link_by_text(dom_elements: list[dict], target_text: str) -> Optional[dict]:
-    """Find an <a href> element whose visible text matches target_text
-    (case-insensitive substring match in either direction)."""
-    if not target_text:
-        return None
-    needle = target_text.strip().lower()
-    if not needle:
-        return None
-    for el in dom_elements:
-        if el.get("tag") != "a" or not el.get("href"):
-            continue
-        text = (el.get("text") or "").strip().lower()
-        if not text or text in _CHROME_LINK_TEXTS:
-            continue
-        if needle in text or text in needle:
-            return el
-    return None
-
-
 # ── Executor ──────────────────────────────────────────────────────────────────
 
 class AgentExecutor:
@@ -404,18 +379,9 @@ class AgentExecutor:
                     continue
  
                 # Correction 2: click landed on a link with href -> navigate directly
-                # Prefer matching by the visible text the model gave us (more reliable
-                # than coordinates), then fall back to coordinate proximity.
-                link_match = _find_dom_link_by_text(dom_elements, action.text or "")
-                if not link_match:
-                    candidate = _find_dom_element_at(
-                        dom_elements, ax, ay, w, h, ("a",)
-                    )
-                    if candidate:
-                        text = (candidate.get("text") or "").strip().lower()
-                        if text and text not in _CHROME_LINK_TEXTS:
-                            link_match = candidate
- 
+                link_match = _find_dom_element_at(
+                    dom_elements, ax, ay, w, h, ("a",)
+                )
                 if link_match and link_match.get("href"):
                     href = link_match["href"]
                     print(f"[executor] DOM correction: click on link -> navigate({href})")
