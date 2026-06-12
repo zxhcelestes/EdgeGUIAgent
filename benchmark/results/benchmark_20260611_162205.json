@@ -1,0 +1,67 @@
+{
+  "timestamp": "2026-06-11T16:18:20.680030Z",
+  "modes": [
+    "screenshot",
+    "hybrid"
+  ],
+  "summary_by_mode": {
+    "screenshot": {
+      "success_rate": 1.0,
+      "avg_steps": 3,
+      "avg_total_time_s": 66.38,
+      "avg_latency_s": 13.018,
+      "n_tasks": 2,
+      "n_success": 2
+    },
+    "hybrid": {
+      "success_rate": 1.0,
+      "avg_steps": 3.5,
+      "avg_total_time_s": 34.89,
+      "avg_latency_s": 4.188,
+      "n_tasks": 2,
+      "n_success": 2
+    }
+  },
+  "task_results": [
+    {
+      "task_id": "huggingface",
+      "mode": "screenshot",
+      "success": true,
+      "step_count": 2,
+      "total_time_s": 54.72,
+      "avg_latency_s": 14.932,
+      "failure_reason": null,
+      "final_answer": "The model's download count shown on the page: 6,289,765"
+    },
+    {
+      "task_id": "wikipedia",
+      "mode": "screenshot",
+      "success": true,
+      "step_count": 4,
+      "total_time_s": 78.049,
+      "avg_latency_s": 11.104,
+      "failure_reason": null,
+      "final_answer": "In deep learning, the transformer is a family of artificial neural network architectures based on the multi-head attention mechanism, in which text is converted to numerical representations called tokens"
+    },
+    {
+      "task_id": "huggingface",
+      "mode": "hybrid",
+      "success": true,
+      "step_count": 2,
+      "total_time_s": 21.949,
+      "avg_latency_s": 3.902,
+      "failure_reason": null,
+      "final_answer": "The model's download count is 6,289,765 downloads last month"
+    },
+    {
+      "task_id": "wikipedia",
+      "mode": "hybrid",
+      "success": true,
+      "step_count": 5,
+      "total_time_s": 47.828,
+      "avg_latency_s": 4.474,
+      "failure_reason": null,
+      "final_answer": "In deep learning, the transformer is a family of artificial neural network architectures based on the multi-head attention mechanism, in which text is converted to numerical representations called tokens, and each token is converted into a vector via lookup from a word embedding table."
+    }
+  ]
+}

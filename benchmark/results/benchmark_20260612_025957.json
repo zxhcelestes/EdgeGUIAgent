@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-06-12T02:55:14.757536Z",
+  "modes": [
+    "dom"
+  ],
+  "summary_by_mode": {
+    "dom": {
+      "success_rate": 0.5,
+      "avg_steps": 8,
+      "avg_total_time_s": 135.78,
+      "avg_latency_s": 12.759,
+      "n_tasks": 2,
+      "n_success": 1
+    }
+  },
+  "task_results": [
+    {
+      "task_id": "huggingface",
+      "mode": "dom",
+      "success": true,
+      "step_count": 11,
+      "total_time_s": 179.231,
+      "avg_latency_s": 10.708,
+      "failure_reason": null,
+      "final_answer": "6,289,765"
+    },
+    {
+      "task_id": "wikipedia",
+      "mode": "dom",
+      "success": false,
+      "step_count": 5,
+      "total_time_s": 92.322,
+      "avg_latency_s": 14.811,
+      "failure_reason": "stuck in loop: same coordinates (0.21, 0.54) repeated",
+      "final_answer": null
+    }
+  ]
+}
